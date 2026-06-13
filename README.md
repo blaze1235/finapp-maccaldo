@@ -38,11 +38,13 @@ Google Sheets  ── база данных (9 листов)
 | **raw_materials** | material_id · name · unit · input_units · unit_options · category · active · low_stock_threshold · created_at |
 | **finished_products** | sku_id · name · flavour · weight_g · packs_per_box · active · created_at |
 | **purchases** | id · date · time · material_id · quantity_input · unit_input · quantity_base · unit_base · total_sum_uzs · price_per_base_unit · supplier · logged_by_telegram_id · price_confirmed · price_confirmed_by · created_at |
-| **consumption** | id · date · time · material_id · quantity_base · unit_base · for_sku_id · logged_by_telegram_id · notes · created_at |
-| **production** | id · date · time · sku_id · boxes_produced · packs_produced · logged_by_telegram_id · created_at |
-| **finished_goods_stock** | sku_id · boxes_in_stock · packs_in_stock · last_updated |
-| **transfers_out** | id · date · time · sku_id · boxes_transferred · logged_by_telegram_id · notes · created_at |
-| **cost_log** | id · date · sku_id · period · total_material_cost_uzs · packs_produced · cost_per_pack_uzs · cost_per_box_uzs · created_at |
+| **consumption** | id · run_id · date · time · material_id · quantity_base · unit_base · for_sku_id · logged_by_telegram_id · notes · created_at |
+| **production** | id · run_id · date · time · sku_id · packs_produced · boxes_produced · total_material_cost_uzs · cost_per_pack_uzs · cost_per_box_uzs · logged_by_telegram_id · created_at |
+| **finished_goods_stock** | sku_id · packs_in_stock · boxes_in_stock · last_updated |
+| **transfers_out** | id · date · time · sku_id · packs_transferred · logged_by_telegram_id · notes · created_at |
+| **cost_log** | id · run_id · date · sku_id · period · total_material_cost_uzs · packs_produced · cost_per_pack_uzs · cost_per_box_uzs · created_at |
+
+> Расход сырья (`consumption`) создаётся автоматически при записи производства — отдельной операции «расход» нет.
 
 Владелец засевается автоматически: `1398614118` · Abdulaziz · `owner`.
 
@@ -50,10 +52,9 @@ Google Sheets  ── база данных (9 листов)
 
 | Роль | Доступ |
 |---|---|
-| **worker** (Рабочий) | Закупки (без цены), расход, производство, просмотр остатков (без цен) |
+| **workshop** (Цех приправ) | Закупки (без цены), производство (расход сырья + выпуск), просмотр остатков (без цен) |
 | **manager** (Менеджер) | Всё выше + цены, себестоимость, передачи, пороги, управление пользователями/материалами/SKU |
 | **owner** (Владелец) | Полный доступ + переключатель ролей в шапке (только отображение) |
-| **viewer** (Наблюдатель) | Только просмотр: остатки и журнал производства |
 
 Проверка роли выполняется и на сервере (GAS), и в интерфейсе.
 
@@ -61,14 +62,25 @@ Google Sheets  ── база данных (9 листов)
 
 ## Бизнес‑логика
 
-- **Остаток сырья** = Σ `purchases.quantity_base` − Σ `consumption.quantity_base` (считается на лету).
-- **Готовая продукция** = Σ `production.boxes_produced` − Σ `transfers_out.boxes_transferred`.
-- **WAC‑себестоимость**: для каждого SKU за день берётся расход по материалам и средневзвешенная
-  цена материала = Σ(сумма подтверждённых закупок) / Σ(объём подтверждённых закупок). Запись — в `cost_log`.
-- **Низкий остаток**: если остаток < порога (`low_stock_threshold` > 0) — в ответе API приходит
-  флаг, в приложении показывается янтарный баннер. По умолчанию пороги = 0 (отключены).
-- **Единицы ввода**: у материала можно задать список «название:множитель» (напр. `кг:1, мешок 25кг:25`).
-  При вводе количество × множитель = объём в базовой единице.
+- **Производственный прогон (главная операция)**: цех записывает один прогон — выбирает
+  готовый продукт, вводит **сколько пачек выпущено** и **список израсходованного сырья**
+  (материал + количество + единица). Система за одну операцию:
+  - списывает сырьё со склада (строки `consumption` с общим `run_id`);
+  - приходует готовую продукцию (строка `production`);
+  - считает себестоимость по WAC и фиксирует её в прогоне и в `cost_log`.
+
+  Пример: 50 кг упаковки + 20 кг специй → продукт «Куриная классик 50г», выпущено 10 000 пачек.
+  При WAC упаковки 10 000 сум/кг и специй 50 000 сум/кг: материальные затраты =
+  50·10 000 + 20·50 000 = **1 500 000 сум** → **150 сум/пачка**, 15 000 сум/коробка.
+- **Остаток сырья** = Σ `purchases.quantity_base` − Σ `consumption.quantity_base` (на лету).
+- **Готовая продукция** = Σ `production.packs_produced` − Σ `transfers_out.packs_transferred` (в пачках; коробки = пачки / packs_per_box).
+- **WAC**: средневзвешенная цена материала = Σ(сумма подтверждённых закупок) / Σ(объём подтверждённых закупок).
+- **Низкий остаток**: если остаток < порога (`low_stock_threshold` > 0) — приходит флаг и показывается баннер. По умолчанию пороги = 0 (отключены).
+- **Единицы ввода**: у материала можно задать список «название:множитель» (напр. `кг:1, мешок 25кг:25`); количество × множитель = объём в базовой единице.
+
+### Скорость
+Один запрос `bootstrap` отдаёт данные сразу для всех экранов; переключение вкладок —
+мгновенное (без новых запросов). На сервере (GAS) каждый лист читается один раз за запрос (кэш).
 
 ---
 

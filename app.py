@@ -171,7 +171,7 @@ def run_bot():
             )
             return
         role = u["data"]["role"]
-        role_ru = {"owner": "Владелец", "manager": "Менеджер", "worker": "Рабочий", "viewer": "Наблюдатель"}.get(role, role)
+        role_ru = {"owner": "Владелец", "manager": "Менеджер", "workshop": "Цех приправ"}.get(role, role)
         bot.send_message(
             m.chat.id,
             f"👋 С возвращением, <b>{name}</b>!\n"
@@ -197,11 +197,11 @@ def run_bot():
         )
 
     def show_stock(chat_id, uid):
-        r = gas("get_stock", uid)
+        r = gas("bootstrap", uid)
         if not r.get("success"):
             bot.send_message(chat_id, "⚠️ " + (r.get("error") or "Не удалось получить данные."))
             return
-        raw = (r.get("data") or {}).get("raw_materials", [])
+        raw = (((r.get("data") or {}).get("stock") or {}).get("raw_materials")) or []
         if not raw:
             bot.send_message(chat_id, "📦 Материалов пока нет. Добавьте их в приложении (Настройки).")
             return
