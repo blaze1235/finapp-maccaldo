@@ -17,6 +17,7 @@
 var SPREADSHEET_ID = '1dArwQHNH5e5gLaelyWS6og5dossjd5o_HgLNEfLsX18'; // "FinApp - Maccaldo"
 var OWNER_ID   = '1398614118';
 var OWNER_NAME = 'Abdulaziz';
+var APP_VERSION = '3'; // bump when the API contract changes; webapp checks this
 
 var ROLE_RANK = { workshop: 1, manager: 2, owner: 3 };
 var VALID_ROLES = ['workshop', 'manager', 'owner'];
@@ -77,7 +78,7 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  return jsonOut_(ok_({ status: 'ok', service: 'FinApp ERP — Цех приправ' }));
+  return jsonOut_(ok_({ status: 'ok', service: 'FinApp ERP — Цех приправ', version: APP_VERSION }));
 }
 
 function jsonOut_(obj) {
@@ -160,13 +161,14 @@ function action_bootstrap_(tid) {
   var withPrices = rank >= 2;
 
   var data = {
+    version: APP_VERSION,
     user: { telegram_id: String(u.telegram_id), name: String(u.name), role: String(u.role) },
     materials: getMaterials_(),
     skus: getSkus_(),
     stock: getStock_(withPrices),
     logs: {
-      purchases: getPurchaseLogs_(60),
-      production: getProductionLogs_(60)
+      purchases: getPurchaseLogs_(60, withPrices),
+      production: getProductionLogs_(60, withPrices)
     },
     pending: withPrices ? getPending_() : [],
     pending_count: withPrices ? getPending_().length : 0,
@@ -557,7 +559,7 @@ function getRecent_(limit) {
   return items.slice(0, limit);
 }
 
-function getPurchaseLogs_(limit) {
+function getPurchaseLogs_(limit, withPrices) {
   var matNames = materialNameMap_();
   var out = getRows_('purchases').rows.map(function (r) {
     return { _ts: String(r.created_at || (r.date + ' ' + r.time)), v: {
@@ -565,14 +567,14 @@ function getPurchaseLogs_(limit) {
       material: matNames[String(r.material_id)] || String(r.material_id),
       quantity_input: toNum_(r.quantity_input), unit_input: String(r.unit_input || ''),
       quantity_base: toNum_(r.quantity_base), unit_base: String(r.unit_base || ''),
-      total_sum_uzs: toNum_(r.total_sum_uzs), supplier: String(r.supplier || ''),
+      total_sum_uzs: withPrices ? toNum_(r.total_sum_uzs) : null, supplier: String(r.supplier || ''),
       price_confirmed: toBool_(r.price_confirmed) } };
   });
   out.sort(function (a, b) { return a._ts < b._ts ? 1 : -1; });
   return out.slice(0, limit).map(function (x) { return x.v; });
 }
 
-function getProductionLogs_(limit) {
+function getProductionLogs_(limit, withPrices) {
   var skuNames = skuNameMap_(), matNames = materialNameMap_();
   var byRun = {};
   getRows_('consumption').rows.forEach(function (r) {
@@ -585,8 +587,9 @@ function getProductionLogs_(limit) {
       id: String(r.id), run_id: String(r.run_id), date: String(r.date), time: String(r.time),
       sku: skuNames[String(r.sku_id)] || String(r.sku_id),
       packs_produced: toNum_(r.packs_produced), boxes_produced: toNum_(r.boxes_produced),
-      total_material_cost_uzs: toNum_(r.total_material_cost_uzs),
-      cost_per_pack_uzs: toNum_(r.cost_per_pack_uzs), cost_per_box_uzs: toNum_(r.cost_per_box_uzs),
+      total_material_cost_uzs: withPrices ? toNum_(r.total_material_cost_uzs) : null,
+      cost_per_pack_uzs: withPrices ? toNum_(r.cost_per_pack_uzs) : null,
+      cost_per_box_uzs: withPrices ? toNum_(r.cost_per_box_uzs) : null,
       materials: byRun[String(r.run_id)] || [] } };
   });
   out.sort(function (a, b) { return a._ts < b._ts ? 1 : -1; });

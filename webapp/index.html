@@ -187,6 +187,7 @@
 <script>
 "use strict";
 var API_URL = window.API_OVERRIDE || "/api";
+var EXPECTED_VERSION = "3";
 var RANK = { workshop:1, manager:2, owner:3 };
 var ROLE_RU = { owner:"Владелец", manager:"Менеджер", workshop:"Цех приправ" };
 var CAT_RU = { seasoning:"Приправа", oil:"Масло", packaging:"Упаковка" };
@@ -201,6 +202,7 @@ var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : 
 
 function $(s,r){ return (r||document).querySelector(s); }
 function rank(){ return RANK[S.effRole] || 0; }
+function canSeePrices(){ return rank() >= 2 && !!(S.D && S.D.can_prices); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
 function fmt(n){ return Number(Math.round((Number(n)||0)*100)/100).toLocaleString("ru-RU",{maximumFractionDigits:2}); }
 function money(n){ return fmt(n)+" сум"; }
@@ -249,7 +251,12 @@ async function doLogin(silent){
   $("#rolechip").textContent = ROLE_RU[S.user.role]||S.user.role;
   if(S.user.role==="owner"){
     var sw=$("#roleswitch"); sw.style.display="block"; sw.value="owner";
-    sw.addEventListener("change",function(){ S.effRole=sw.value; renderNav(); render(); });
+    sw.addEventListener("change",function(){
+      S.effRole=sw.value;
+      if(rank()<2 && S.tab==="settings") S.tab="home";
+      renderNav(); render();
+      toast("Режим: "+(ROLE_RU[S.effRole]||S.effRole),"ok");
+    });
   }
   await boot();
 }
@@ -260,6 +267,7 @@ async function boot(showSpinner){
   var r = await api("bootstrap");
   if(!r.success){ $("#main").innerHTML='<div class="card"><div class="muted">⚠️ '+esc(r.error)+'</div></div>'; return; }
   S.D = r.data; S.D.alerts = r.alerts||[];
+  S.stale = (String(S.D.version||"") !== EXPECTED_VERSION);
   renderNav(); render();
 }
 
@@ -291,16 +299,23 @@ function render(){
 }
 
 function alertHtml(){
+  var h="";
+  if(S.stale){
+    h+='<div id="alert" class="show" style="background:var(--rdBg);color:var(--rd);"><span>⚠️</span>'+
+       '<span>Бэкенд Apps Script устарел. Переразверните <b>Code.gs</b> (Deploy → Manage deployments → New version).</span></div>';
+  }
   var a=S.D.alerts||[];
-  if(!a.length) return "";
-  var names=a.map(function(x){ return x.name+" ("+fmt(x.current_stock)+" "+x.unit+")"; }).join(", ");
-  return '<div id="alert" class="show"><span>⚠️</span><span>Низкий остаток: '+esc(names)+'</span></div>';
+  if(a.length){
+    var names=a.map(function(x){ return x.name+" ("+fmt(x.current_stock)+" "+x.unit+")"; }).join(", ");
+    h+='<div id="alert" class="show"><span>⚠️</span><span>Низкий остаток: '+esc(names)+'</span></div>';
+  }
+  return h;
 }
 function empty(ico,txt){ return '<div class="empty"><div class="e">'+ico+'</div>'+esc(txt)+'</div>'; }
 
 /* ── HOME ── */
 function renderHome(m){
-  var D=S.D, withP=D.can_prices;
+  var D=S.D, withP=canSeePrices();
   var raw=D.stock.raw_materials||[], fin=D.stock.finished_goods||[];
   var h=alertHtml();
 
@@ -360,7 +375,7 @@ function renderHome(m){
 
 /* ── STOCK ── */
 function renderStock(m){
-  var D=S.D, withP=D.stock.with_prices, raw=D.stock.raw_materials||[], fin=D.stock.finished_goods||[];
+  var D=S.D, withP=canSeePrices(), raw=D.stock.raw_materials||[], fin=D.stock.finished_goods||[];
   var h=alertHtml();
 
   h+='<div class="ph">Сырьё и материалы</div>';
@@ -415,7 +430,26 @@ function unitOpts(matId,sel){
 }
 
 function renderPurchase(b){
-  var h='<div class="card"><div class="fg">'+
+  var h="", withP=canSeePrices();
+
+  // Manager: pending price confirmations shown first and prominently.
+  if(rank()>=2){
+    var pend=S.D.pending||[];
+    if(pend.length){
+      h+='<div class="ph">Подтвердить цену · '+pend.length+'</div>';
+      pend.forEach(function(p){
+        h+='<div class="card"><div class="row"><div><div class="nm">'+esc(p.material)+'</div>'+
+          '<div class="sub">'+esc(p.date)+' · '+fmt(p.quantity_base)+' '+esc(p.unit_base)+(p.supplier?' · '+esc(p.supplier):'')+'</div></div></div>'+
+          '<div class="inl" style="margin-top:11px;"><input class="fin mono" type="number" inputmode="numeric" placeholder="Сумма, сум" id="cf_'+p.id+'" />'+
+          '<button class="btn btn-gr" style="flex:0 0 auto;padding:14px 18px;" data-cf="'+p.id+'">Подтвердить</button></div></div>';
+      });
+    } else {
+      h+='<div class="ph">Подтверждение цен</div><div class="card"><div class="sub">Нет закупок, ожидающих цену.</div></div>';
+    }
+  }
+
+  // New purchase form.
+  h+='<div class="ph">Новая закупка</div><div class="card"><div class="fg">'+
     '<div><label class="flabel">Материал</label><select class="fin" id="pmat">'+matOptions()+'</select></div>'+
     '<div class="inl"><div><label class="flabel">Количество</label><input class="fin big mono" id="pqty" type="number" inputmode="decimal" placeholder="0" /></div>'+
     '<div style="flex:0 0 130px;"><label class="flabel">Ед.</label><select class="fin" id="punit"></select></div></div>'+
@@ -423,16 +457,19 @@ function renderPurchase(b){
     '<button class="btn btn-ink" id="psub">Записать закупку</button>'+
     '<div class="sub" style="text-align:center;">Цену укажет менеджер при подтверждении</div></div></div>';
 
-  if(rank()>=2){
-    var pend=S.D.pending||[];
-    if(pend.length){
-      h+='<div class="ph">Подтвердить цену ('+pend.length+')</div>';
-      pend.forEach(function(p){
-        h+='<div class="card"><div class="row"><div><div class="nm">'+esc(p.material)+'</div><div class="sub">'+esc(p.date)+' · '+fmt(p.quantity_base)+' '+esc(p.unit_base)+(p.supplier?' · '+esc(p.supplier):'')+'</div></div></div>'+
-          '<div class="inl" style="margin-top:10px;"><input class="fin mono" type="number" inputmode="numeric" placeholder="Сумма, сум" id="cf_'+p.id+'" /><button class="btn btn-gr btn-sm" style="flex:0 0 auto;" data-cf="'+p.id+'">✓</button></div></div>';
-      });
-    }
+  // History.
+  var logs=(S.D.logs&&S.D.logs.purchases)||[];
+  if(logs.length){
+    h+='<div class="ph">История закупок</div>';
+    logs.slice(0,15).forEach(function(l){
+      var chip = l.price_confirmed
+        ? '<span class="chip chip-g">'+(withP&&l.total_sum_uzs!=null?money(l.total_sum_uzs):"оплачено")+'</span>'
+        : '<span class="chip chip-a">без цены</span>';
+      h+='<div class="card"><div class="row"><div><div class="nm">'+esc(l.material)+'</div>'+
+        '<div class="sub">'+esc(l.date)+' '+esc(l.time)+' · '+fmt(l.quantity_input)+' '+esc(l.unit_input)+(l.supplier?' · '+esc(l.supplier):'')+'</div></div>'+chip+'</div></div>';
+    });
   }
+
   b.innerHTML=h;
   var mat=$("#pmat"); mat.addEventListener("change",function(){ $("#punit").innerHTML=unitOpts(mat.value); });
   $("#punit").innerHTML=unitOpts(mat.value);
@@ -448,6 +485,18 @@ function renderProduction(b){
     '<button class="ghost" id="paddline" style="margin-top:4px;">+ добавить материал</button></div>'+
     '<button class="btn btn-ink" id="prodsub">Записать производство</button>'+
     '<div class="sub" style="text-align:center;">Система рассчитает себестоимость по WAC</div></div></div>';
+  var withP=canSeePrices();
+  var plogs=(S.D.logs&&S.D.logs.production)||[];
+  if(plogs.length){
+    h+='<div class="ph">История прогонов</div>';
+    plogs.slice(0,12).forEach(function(l){
+      var mats=(l.materials||[]).map(function(mm){ return esc(mm.material)+" "+fmt(mm.quantity_base)+" "+esc(mm.unit); }).join(" · ");
+      h+='<div class="card"><div class="row"><div><div class="nm">'+esc(l.sku)+'</div>'+
+        '<div class="sub">'+esc(l.date)+' '+esc(l.time)+' · '+fmt(l.packs_produced)+' пачек</div></div>'+
+        (withP&&l.cost_per_pack_uzs!=null?'<span class="chip chip-b">'+fmt(l.cost_per_pack_uzs)+' /пачка</span>':'')+'</div>'+
+        (mats?'<div class="sub" style="margin-top:8px;">↳ '+mats+'</div>':'')+'</div>';
+    });
+  }
   b.innerHTML=h;
   renderProdLines();
   $("#psku").addEventListener("change",updateBoxHint);
