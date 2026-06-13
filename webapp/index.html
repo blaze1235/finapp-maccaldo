@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0D1117" />
+<title>FinApp · Цех приправ</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0D1117; --surface:#161B22; --surface-2:#1C2129; --border:#2A3038;
+    --green:#2EA043; --amber:#D29922; --red:#F85149; --text:#E6EDF3;
+    --muted:#8B949E; --muted-2:#6E7681; --accent:#2EA043;
+    --green-dim:rgba(46,160,67,.15); --amber-dim:rgba(210,153,34,.15); --red-dim:rgba(248,81,73,.15);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:'Inter',system-ui,-apple-system,sans-serif;
+    font-size:15px; line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior-y:none;
+  }
+  .mono{font-family:'JetBrains Mono',monospace; font-variant-numeric:tabular-nums;}
+  button{font-family:inherit; cursor:pointer; border:none; color:inherit;}
+  input,select,textarea{font-family:inherit; font-size:15px;}
+  ::-webkit-scrollbar{width:0;height:0;}
+
+  /* ── Layout ── */
+  #app{max-width:680px; margin:0 auto; min-height:100%; display:flex; flex-direction:column;}
+  .screen{display:none; flex-direction:column; flex:1;}
+  .screen.active{display:flex;}
+
+  /* ── Login ── */
+  #login{justify-content:center; align-items:center; padding:24px; gap:18px; flex:1;}
+  .login-card{background:var(--surface); border:1px solid var(--border); border-radius:18px; padding:28px 22px; width:100%; max-width:360px; text-align:center;}
+  .logo{font-size:30px; font-weight:700; letter-spacing:-.5px;}
+  .logo span{color:var(--accent);}
+  .login-sub{color:var(--muted); font-size:14px; margin:6px 0 22px;}
+  .field{display:flex; flex-direction:column; gap:6px; text-align:left; margin-bottom:14px;}
+  .field label{font-size:13px; color:var(--muted); font-weight:500;}
+  .input{
+    background:var(--surface-2); border:1px solid var(--border); border-radius:11px;
+    padding:13px 14px; color:var(--text); width:100%; outline:none; transition:border-color .15s;
+  }
+  .input:focus{border-color:var(--accent);}
+
+  /* ── Header ── */
+  header{
+    position:sticky; top:0; z-index:20; background:rgba(13,17,23,.92); backdrop-filter:blur(10px);
+    padding:calc(env(safe-area-inset-top) + 12px) 16px 12px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  .brand{font-size:18px; font-weight:700; letter-spacing:-.3px; white-space:nowrap;}
+  .brand span{color:var(--accent);}
+  .hdr-right{display:flex; align-items:center; gap:8px;}
+  .role-badge{
+    font-size:12px; font-weight:600; padding:5px 10px; border-radius:20px;
+    background:var(--surface-2); border:1px solid var(--border); color:var(--muted);
+  }
+  .role-switch{
+    background:var(--surface-2); border:1px solid var(--border); border-radius:20px;
+    color:var(--text); font-size:12px; font-weight:600; padding:5px 8px; outline:none;
+  }
+
+  /* ── Content ── */
+  main{flex:1; padding:14px 14px 86px; animation:fade .25s ease;}
+  @keyframes fade{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:none;}}
+  .section-title{font-size:13px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; margin:18px 4px 9px;}
+  .section-title:first-child{margin-top:4px;}
+
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:10px;}
+  .card.tight{padding:11px 13px;}
+  .row{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  .row + .row{margin-top:10px; padding-top:10px; border-top:1px solid var(--border);}
+  .muted{color:var(--muted);} .small{font-size:13px;} .xs{font-size:12px;}
+  .big-num{font-size:22px; font-weight:700;}
+
+  /* ── Health bar ── */
+  .health-wrap{display:flex; flex-wrap:wrap; gap:9px; padding:4px 2px;}
+  .health-dot{display:flex; flex-direction:column; align-items:center; gap:5px; min-width:42px;}
+  .dot{width:14px; height:14px; border-radius:50%;}
+  .dot.green{background:var(--green); box-shadow:0 0 8px var(--green-dim);}
+  .dot.amber{background:var(--amber); box-shadow:0 0 8px var(--amber-dim);}
+  .dot.red{background:var(--red); box-shadow:0 0 8px var(--red-dim);}
+  .dot-label{font-size:10px; color:var(--muted-2); max-width:48px; text-align:center; line-height:1.1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+
+  /* ── Stock list ── */
+  .stk{display:flex; align-items:center; gap:11px;}
+  .stk-bar{width:4px; align-self:stretch; border-radius:3px; min-height:34px;}
+  .stk-bar.green{background:var(--green);} .stk-bar.amber{background:var(--amber);} .stk-bar.red{background:var(--red);}
+  .stk-name{font-weight:600;}
+  .pill{font-size:11px; padding:2px 8px; border-radius:20px; background:var(--surface-2); color:var(--muted); border:1px solid var(--border);}
+  .pill.green{color:var(--green); border-color:rgba(46,160,67,.4);}
+  .pill.amber{color:var(--amber); border-color:rgba(210,153,34,.4);}
+  .pill.red{color:var(--red); border-color:rgba(248,81,73,.4);}
+
+  /* ── Buttons ── */
+  .btn{
+    background:var(--accent); color:#fff; font-weight:600; font-size:15px;
+    padding:13px 16px; border-radius:12px; width:100%; transition:transform .08s, opacity .15s;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+  }
+  .btn:active{transform:scale(.97);}
+  .btn:disabled{opacity:.5;}
+  .btn.secondary{background:var(--surface-2); border:1px solid var(--border); color:var(--text);}
+  .btn.amber{background:var(--amber);}
+  .btn.danger{background:transparent; border:1px solid var(--red); color:var(--red);}
+  .btn.sm{width:auto; padding:8px 12px; font-size:13px; border-radius:9px;}
+  .btn-ghost{background:transparent; color:var(--accent); font-weight:600; font-size:13px; padding:6px 8px;}
+
+  /* ── Alert banner ── */
+  #alert-banner{
+    display:none; margin:0 14px 0; background:var(--amber-dim); border:1px solid rgba(210,153,34,.4);
+    border-radius:12px; padding:11px 13px; color:var(--amber); font-size:13px; font-weight:500;
+    align-items:flex-start; gap:9px;
+  }
+  #alert-banner.show{display:flex;}
+
+  /* ── Sub-tabs ── */
+  .subtabs{display:flex; gap:6px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:4px; margin-bottom:12px;}
+  .subtab{flex:1; text-align:center; padding:9px 6px; border-radius:9px; font-size:13px; font-weight:600; color:var(--muted); background:transparent; transition:background .15s,color .15s;}
+  .subtab.active{background:var(--surface-2); color:var(--text);}
+
+  /* ── Forms ── */
+  .form-grid{display:flex; flex-direction:column; gap:12px;}
+  .inline-2{display:flex; gap:10px;}
+  .inline-2 > *{flex:1;}
+  select.input{appearance:none; background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238B949E' stroke-width='3'><path d='M6 9l6 6 6-6'/></svg>"); background-repeat:no-repeat; background-position:right 14px center; padding-right:34px;}
+
+  /* ── Empty state ── */
+  .empty{text-align:center; color:var(--muted); padding:32px 16px; font-size:14px;}
+  .empty .em-ico{font-size:30px; margin-bottom:8px; opacity:.7;}
+
+  /* ── Bottom nav ── */
+  nav{
+    position:fixed; bottom:0; left:0; right:0; z-index:30;
+    background:rgba(13,17,23,.95); backdrop-filter:blur(12px); border-top:1px solid var(--border);
+    display:flex; padding:6px 4px calc(env(safe-area-inset-bottom) + 6px); max-width:680px; margin:0 auto;
+  }
+  .nav-btn{flex:1; background:transparent; display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 2px; color:var(--muted-2); transition:color .15s;}
+  .nav-btn .ico{font-size:20px; line-height:1;}
+  .nav-btn .lbl{font-size:11px; font-weight:600;}
+  .nav-btn.active{color:var(--accent);}
+  .nav-badge{position:absolute; top:2px; transform:translateX(13px); background:var(--amber); color:#0D1117; font-size:10px; font-weight:700; min-width:16px; height:16px; border-radius:9px; display:flex; align-items:center; justify-content:center; padding:0 4px;}
+  .nav-btn{position:relative;}
+
+  /* ── Modal ── */
+  .modal-overlay{position:fixed; inset:0; z-index:50; background:rgba(0,0,0,.6); display:none; align-items:flex-end; justify-content:center;}
+  .modal-overlay.show{display:flex;}
+  .modal{background:var(--surface); border:1px solid var(--border); border-radius:18px 18px 0 0; width:100%; max-width:680px; max-height:88vh; overflow-y:auto; padding:18px 16px calc(env(safe-area-inset-bottom) + 22px); animation:slideUp .22s ease;}
+  @keyframes slideUp{from{transform:translateY(100%);} to{transform:none;}}
+  .modal-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;}
+  .modal-title{font-size:18px; font-weight:700;}
+  .modal-close{background:var(--surface-2); border-radius:50%; width:32px; height:32px; font-size:18px; color:var(--muted); display:flex; align-items:center; justify-content:center;}
+
+  /* ── Toast ── */
+  #toasts{position:fixed; bottom:84px; left:0; right:0; z-index:60; display:flex; flex-direction:column; align-items:center; gap:8px; pointer-events:none; padding:0 16px;}
+  .toast{background:var(--surface-2); border:1px solid var(--border); color:var(--text); padding:11px 16px; border-radius:11px; font-size:14px; font-weight:500; box-shadow:0 8px 24px rgba(0,0,0,.4); animation:toastIn .25s ease; max-width:480px; width:100%; text-align:center;}
+  .toast.success{border-color:rgba(46,160,67,.5);} .toast.success::before{content:"✓ "; color:var(--green);}
+  .toast.error{border-color:rgba(248,81,73,.5);} .toast.error::before{content:"⚠ "; color:var(--red);}
+  @keyframes toastIn{from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:none;}}
+
+  .spinner{width:30px; height:30px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; margin:40px auto;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .center-load{display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; color:var(--muted);}
+  .tag{display:inline-block; font-size:11px; font-weight:600; padding:2px 7px; border-radius:6px; margin-right:6px;}
+  .tag.prod{background:var(--green-dim); color:var(--green);}
+  .tag.pur{background:rgba(88,166,255,.15); color:#58A6FF;}
+  .tag.con{background:var(--amber-dim); color:var(--amber);}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- LOGIN -->
+  <div id="login" class="screen active">
+    <div class="login-card">
+      <div class="logo">Fin<span>App</span></div>
+      <div class="login-sub">Цех приправ · вход для администратора</div>
+      <div class="field">
+        <label>Telegram ID</label>
+        <input id="login-id" class="input mono" type="number" inputmode="numeric" placeholder="например 1398614118" />
+      </div>
+      <div class="field" id="login-code-field" style="display:none;">
+        <label>Код доступа</label>
+        <input id="login-code" class="input" type="password" placeholder="если задан администратором" />
+      </div>
+      <button class="btn" id="login-btn">Войти</button>
+      <div class="login-sub" style="margin:14px 0 0;">В Telegram вход выполняется автоматически.</div>
+    </div>
+  </div>
+
+  <!-- MAIN APP -->
+  <div id="main-app" class="screen">
+    <header>
+      <div class="brand">Fin<span>App</span> · Цех приправ</div>
+      <div class="hdr-right">
+        <span id="role-badge" class="role-badge">—</span>
+        <select id="role-switch" class="role-switch" style="display:none;">
+          <option value="owner">👑 Владелец</option>
+          <option value="manager">📊 Менеджер</option>
+          <option value="worker">🔧 Рабочий</option>
+          <option value="viewer">👁 Наблюдатель</option>
+        </select>
+      </div>
+    </header>
+
+    <div id="alert-banner"><span>⚠️</span><span id="alert-text"></span></div>
+
+    <main id="content"></main>
+
+    <nav>
+      <button class="nav-btn active" data-tab="dash"><span class="ico">🏠</span><span class="lbl">Главная</span></button>
+      <button class="nav-btn" data-tab="stock"><span class="ico">📦</span><span class="lbl">Склад</span></button>
+      <button class="nav-btn" data-tab="logs"><span class="ico">📝</span><span class="lbl">Логи</span></button>
+      <button class="nav-btn" id="nav-settings" data-tab="settings"><span class="ico">⚙️</span><span class="lbl">Настройки</span></button>
+    </nav>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal">
+    <div class="modal-head">
+      <div class="modal-title" id="modal-title"></div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+"use strict";
+
+// API goes through the same-origin Railway proxy (no CORS). Override only for local dev.
+var API_URL = window.API_OVERRIDE || "/api";
+
+var RANK = { viewer:0, worker:1, manager:2, owner:3 };
+var ROLE_RU = { owner:"Владелец", manager:"Менеджер", worker:"Рабочий", viewer:"Наблюдатель" };
+var CAT_RU = { seasoning:"Приправа", oil:"Масло", packaging:"Упаковка" };
+
+var state = {
+  telegramId:null, accessCode:"",
+  user:null,            // {telegram_id, name, role}
+  effectiveRole:null,   // role used for UI (owner can switch)
+  materials:[], skus:[], stock:null, alerts:[],
+  pendingCount:0, todayProduction:[], recent:[], canPrices:false,
+  tab:"dash", logTab:"purchases",
+  logsCache:{}
+};
+
+var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+
+// ───────── helpers ─────────
+function $(s, root){ return (root||document).querySelector(s); }
+function rank(){ return RANK[state.effectiveRole] != null ? RANK[state.effectiveRole] : 0; }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+function fmt(n){
+  var x = Math.round((Number(n)||0)*100)/100;
+  var parts = String(x).split(".");
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return parts.join(".");
+}
+function money(n){ return fmt(n) + " сум"; }
+
+function toast(msg, type){
+  var box = $("#toasts");
+  var el = document.createElement("div");
+  el.className = "toast " + (type||"");
+  el.textContent = msg;
+  box.appendChild(el);
+  setTimeout(function(){ el.style.transition="opacity .3s"; el.style.opacity="0"; setTimeout(function(){ el.remove(); }, 300); }, 2500);
+}
+
+async function api(action, extra){
+  var payload = Object.assign({ action:action, telegram_id:state.telegramId, access_code:state.accessCode }, extra||{});
+  try {
+    var res = await fetch(API_URL, {
+      method:"POST",
+      headers:{ "Content-Type":"text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+    var json = await res.json();
+    return json;
+  } catch(e){
+    return { success:false, error:"Нет связи с сервером. Проверьте подключение." };
+  }
+}
+
+// ───────── login ─────────
+function initAuth(){
+  if (tg){ try{ tg.ready(); tg.expand(); tg.setHeaderColor && tg.setHeaderColor("#0D1117"); }catch(e){} }
+  var fromTg = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? String(tg.initDataUnsafe.user.id) : null;
+  if (fromTg){
+    state.telegramId = fromTg;
+    doLogin(true);
+  } else {
+    $("#login-btn").addEventListener("click", function(){
+      var id = $("#login-id").value.trim();
+      if (!/^\d+$/.test(id)){ toast("Введите числовой Telegram ID", "error"); return; }
+      state.telegramId = id;
+      state.accessCode = $("#login-code").value.trim();
+      doLogin(false);
+    });
+    $("#login-id").addEventListener("keydown", function(e){ if(e.key==="Enter") $("#login-btn").click(); });
+  }
+}
+
+async function doLogin(silent){
+  if(!silent){ $("#login-btn").disabled = true; $("#login-btn").textContent = "Вход…"; }
+  var r = await api("get_user");
+  if (!r.success){
+    if(!silent){
+      $("#login-btn").disabled = false; $("#login-btn").textContent = "Войти";
+      // reveal access-code field if the server asks for a code
+      if (/код доступа/i.test(r.error||"")) $("#login-code-field").style.display = "flex";
+    }
+    if (silent){ showLoginScreen(); }
+    toast(r.error || "Не удалось войти", "error");
+    return;
+  }
+  state.user = r.data;
+  state.effectiveRole = r.data.role;
+  enterApp();
+}
+
+function showLoginScreen(){
+  $("#login").classList.add("active");
+  $("#main-app").classList.remove("active");
+}
+
+function enterApp(){
+  $("#login").classList.remove("active");
+  $("#main-app").classList.add("active");
+
+  $("#role-badge").textContent = ROLE_RU[state.user.role] || state.user.role;
+  if (state.user.role === "owner"){
+    var sw = $("#role-switch");
+    sw.style.display = "block";
+    sw.value = "owner";
+    sw.addEventListener("change", function(){
+      state.effectiveRole = sw.value;
+      applyRoleUI();
+      render();
+    });
+  }
+  applyRoleUI();
+
+  document.querySelectorAll(".nav-btn").forEach(function(b){
+    b.addEventListener("click", function(){ switchTab(b.dataset.tab); });
+  });
+
+  loadDashboard();
+}
+
+function applyRoleUI(){
+  $("#nav-settings").style.display = rank() >= 2 ? "flex" : "none";
+  if (state.tab === "settings" && rank() < 2) state.tab = "dash";
+  $("#role-badge").textContent = (ROLE_RU[state.effectiveRole]||state.effectiveRole) +
+    (state.effectiveRole !== state.user.role ? " (просмотр)" : "");
+}
+
+function switchTab(tab){
+  state.tab = tab;
+  document.querySelectorAll(".nav-btn").forEach(function(b){ b.classList.toggle("active", b.dataset.tab===tab); });
+  render();
+  if (tab === "stock") loadStock();
+  if (tab === "logs") loadLogs(state.logTab);
+}
+
+// ───────── data loads ─────────
+async function loadDashboard(){
+  $("#content").innerHTML = '<div class="center-load"><div class="spinner"></div>Загрузка…</div>';
+  var r = await api("bootstrap");
+  if (!r.success){ $("#content").innerHTML = errCard(r.error); return; }
+  state.materials = r.data.materials || [];
+  state.skus = r.data.skus || [];
+  state.stock = r.data.stock || null;
+  state.pendingCount = r.data.pending_count || 0;
+  state.todayProduction = r.data.today_production || [];
+  state.recent = r.data.recent || [];
+  state.canPrices = !!r.data.can_prices;
+  state.alerts = r.alerts || [];
+  renderAlerts();
+  renderPendingBadge();
+  render();
+}
+
+async function loadStock(){
+  var action = (rank() >= 2 && state.user.role !== "viewer") ? "get_stock_full" : "get_stock";
+  // effectiveRole may be < actual; backend uses actual role, but respect simulated view:
+  if (rank() < 2) action = "get_stock";
+  var r = await api(action);
+  if (r.success){ state.stock = r.data; renderStock(); }
+  else if (action === "get_stock_full"){
+    var r2 = await api("get_stock");
+    if (r2.success){ state.stock = r2.data; renderStock(); }
+  }
+}
+
+async function loadLogs(type){
+  state.logTab = type;
+  var r = await api("get_logs", { type:type });
+  if (r.success){ state.logsCache[type] = r.data.logs || []; renderLogs(); }
+  else { toast(r.error, "error"); }
+}
+
+// ───────── render dispatcher ─────────
+function render(){
+  if (state.tab === "dash") renderDash();
+  else if (state.tab === "stock") renderStock();
+  else if (state.tab === "logs") renderLogs();
+  else if (state.tab === "settings") renderSettings();
+}
+
+function renderAlerts(){
+  var b = $("#alert-banner");
+  if (state.alerts && state.alerts.length){
+    var names = state.alerts.map(function(a){ return a.name + " (" + fmt(a.current_stock) + " " + a.unit + ")"; });
+    $("#alert-text").textContent = "Низкий остаток: " + names.join(", ");
+    b.classList.add("show");
+  } else { b.classList.remove("show"); }
+}
+
+function renderPendingBadge(){
+  var btn = document.querySelector('.nav-btn[data-tab="logs"]');
+  var old = btn.querySelector(".nav-badge"); if (old) old.remove();
+  if (rank() >= 2 && state.pendingCount > 0){
+    var s = document.createElement("span"); s.className="nav-badge"; s.textContent=state.pendingCount; btn.appendChild(s);
+  }
+}
+
+function errCard(msg){ return '<div class="card"><div class="row"><span>⚠️ '+esc(msg||"Ошибка")+'</span></div></div>'; }
+function emptyState(ico, text){ return '<div class="empty"><div class="em-ico">'+ico+'</div>'+esc(text)+'</div>'; }
+
+// ───────── DASHBOARD ─────────
+function renderDash(){
+  var raw = (state.stock && state.stock.raw_materials) || [];
+  var html = "";
+
+  html += '<div class="section-title">Состояние склада</div>';
+  if (raw.length){
+    html += '<div class="card"><div class="health-wrap">';
+    raw.forEach(function(m){
+      html += '<div class="health-dot"><span class="dot '+m.health+'"></span><span class="dot-label">'+esc(m.name)+'</span></div>';
+    });
+    html += '</div></div>';
+  } else {
+    html += '<div class="card">'+emptyState("📦","Нет материалов — добавьте в Настройках")+'</div>';
+  }
+
+  html += '<div class="section-title">Производство сегодня</div>';
+  if (state.todayProduction.length){
+    html += '<div class="card">';
+    state.todayProduction.forEach(function(p, i){
+      html += '<div class="row'+(i?'':'')+'"><span class="stk-name">'+esc(p.name)+'</span><span class="mono">'+fmt(p.boxes)+' кор.</span></div>';
+    });
+    html += '</div>';
+  } else {
+    html += '<div class="card">'+emptyState("🏭","Сегодня производство ещё не записано")+'</div>';
+  }
+
+  if (rank() >= 2 && state.pendingCount > 0){
+    html += '<div class="section-title">Требует внимания</div>';
+    html += '<div class="card tight"><div class="row"><span>🟡 Закупки без цены</span>'+
+            '<button class="btn sm amber" onclick="goPending()">'+state.pendingCount+' — подтвердить</button></div></div>';
+  }
+
+  html += '<div class="section-title">Последние записи</div>';
+  if (state.recent.length){
+    html += '<div class="card">';
+    state.recent.forEach(function(it, i){
+      var tag = it.type==="production"?'<span class="tag prod">Произв.</span>':
+                it.type==="purchase"?'<span class="tag pur">Закупка</span>':
+                '<span class="tag con">Расход</span>';
+      html += '<div class="row"><span class="small">'+tag+esc(it.title)+'</span>'+
+              '<span class="mono small muted">'+esc(it.detail)+'</span></div>';
+    });
+    html += '</div>';
+  } else {
+    html += '<div class="card">'+emptyState("🗒️","Нет данных — добавьте первую запись в разделе «Логи»")+'</div>';
+  }
+
+  $("#content").innerHTML = html;
+}
+
+function goPending(){ switchTab("logs"); setLogTab("purchases"); }
+
+// ───────── WAREHOUSE ─────────
+function renderStock(){
+  if (!state.stock){ $("#content").innerHTML = '<div class="center-load"><div class="spinner"></div></div>'; return; }
+  var raw = state.stock.raw_materials || [];
+  var fin = state.stock.finished_goods || [];
+  var withPrices = state.stock.with_prices;
+  var html = "";
+
+  html += '<div class="section-title">Сырьё и материалы</div>';
+  if (raw.length){
+    raw.forEach(function(m){
+      html += '<div class="card tight"><div class="stk">'+
+        '<div class="stk-bar '+m.health+'"></div>'+
+        '<div style="flex:1; min-width:0;">'+
+          '<div class="row"><span class="stk-name">'+esc(m.name)+'</span>'+
+          '<span class="mono '+m.health+'">'+fmt(m.current_stock)+' '+esc(m.unit)+'</span></div>'+
+          (withPrices ?
+            '<div class="row" style="margin-top:6px; padding-top:6px;"><span class="xs muted">WAC: '+fmt(m.wac_price)+' сум/'+esc(m.unit)+'</span>'+
+            '<span class="xs muted mono">≈ '+money(m.total_value)+'</span></div>' : '')+
+        '</div></div></div>';
+    });
+    if (withPrices){
+      var totalVal = raw.reduce(function(s,m){ return s + (m.total_value||0); }, 0);
+      html += '<div class="card tight"><div class="row"><span class="muted small">Оценка сырья</span><span class="mono">'+money(totalVal)+'</span></div></div>';
+    }
+  } else {
+    html += '<div class="card">'+emptyState("📦","Нет материалов — добавьте в Настройках")+'</div>';
+  }
+
+  html += '<div class="section-title">Готовая продукция</div>';
+  if (fin.length){
+    fin.forEach(function(s){
+      html += '<div class="card tight">'+
+        '<div class="row"><span class="stk-name">'+esc(s.name)+'</span>'+
+        '<span class="mono">'+fmt(s.boxes_in_stock)+' кор.</span></div>'+
+        '<div class="row" style="margin-top:6px; padding-top:6px;"><span class="xs muted">'+fmt(s.packs_in_stock)+' пачек'+
+        (s.weight_g?(' · '+fmt(s.weight_g)+' г'):'')+'</span>'+
+        (withPrices ? '<span class="xs muted mono">с/с: '+money(s.cost_per_box)+'/кор</span>' : '')+
+        '</div></div>';
+    });
+    if (withPrices){
+      var totalFin = fin.reduce(function(a,s){ return a + (s.total_value||0); }, 0);
+      html += '<div class="card tight"><div class="row"><span class="muted small">Оценка продукции</span><span class="mono">'+money(totalFin)+'</span></div></div>';
+    }
+  } else {
+    html += '<div class="card">'+emptyState("🏷️","Нет продукции — добавьте SKU в Настройках")+'</div>';
+  }
+
+  if (rank() >= 2 && fin.length){
+    html += '<button class="btn secondary" style="margin-top:12px;" onclick="openTransfer()">🚚 Передать на главный завод</button>';
+  }
+
+  $("#content").innerHTML = html;
+}
+
+// ───────── LOGS ─────────
+function renderLogs(){
+  var html = '<div class="subtabs">'+
+    subtabBtn("purchases","Закупки")+
+    subtabBtn("consumption","Расход")+
+    subtabBtn("production","Производство")+
+    '</div><div id="log-body"></div>';
+  $("#content").innerHTML = html;
+  document.querySelectorAll(".subtab").forEach(function(b){
+    b.addEventListener("click", function(){ setLogTab(b.dataset.st); });
+  });
+  renderLogBody();
+}
+function subtabBtn(id, label){
+  return '<button class="subtab '+(state.logTab===id?"active":"")+'" data-st="'+id+'">'+label+'</button>';
+}
+function setLogTab(type){
+  state.logTab = type;
+  document.querySelectorAll(".subtab").forEach(function(b){ b.classList.toggle("active", b.dataset.st===type); });
+  renderLogBody();
+  if (!state.logsCache[type]) loadLogs(type); else renderLogBody();
+}
+
+function renderLogBody(){
+  var body = $("#log-body"); if(!body) return;
+  var canLog = rank() >= 1;
+  var canPrice = rank() >= 2;
+  var type = state.logTab;
+  var html = "";
+
+  // viewer restriction
+  if (type !== "production" && rank() < 1){
+    body.innerHTML = '<div class="card">'+emptyState("🔒","Недостаточно прав для просмотра этого раздела")+'</div>';
+    return;
+  }
+
+  if (type === "purchases"){
+    if (canLog) html += purchaseForm();
+    if (canPrice) html += pendingBlock();
+    html += '<div class="section-title">История закупок</div>' + logList("purchases");
+  } else if (type === "consumption"){
+    if (canLog) html += consumptionForm();
+    html += '<div class="section-title">История расхода</div>' + logList("consumption");
+  } else {
+    if (canLog) html += productionForm();
+    html += '<div class="section-title">История производства</div>' + logList("production");
+  }
+  body.innerHTML = html;
+  attachLogFormHandlers();
+}
+
+function matOptions(){
+  if (!state.materials.length) return '<option value="">— нет материалов —</option>';
+  return '<option value="">Выберите материал…</option>' + state.materials.map(function(m){
+    return '<option value="'+m.material_id+'">'+esc(m.name)+'</option>';
+  }).join("");
+}
+function skuOptions(empty){
+  if (!state.skus.length) return '<option value="">— нет продукции —</option>';
+  return '<option value="">'+(empty||"Выберите продукт…")+'</option>' + state.skus.map(function(s){
+    return '<option value="'+s.sku_id+'">'+esc(s.name)+'</option>';
+  }).join("");
+}
+function unitOptionsFor(matId){
+  var m = state.materials.find(function(x){ return x.material_id===matId; });
+  var opts = (m && m.unit_options && m.unit_options.length) ? m.unit_options : (m?[{label:m.unit,factor:1}]:[]);
+  return opts.map(function(o){ return '<option value="'+esc(o.label)+'">'+esc(o.label)+'</option>'; }).join("");
+}
+
+function purchaseForm(){
+  return '<div class="card"><div class="section-title" style="margin-top:0;">Новая закупка</div><div class="form-grid">'+
+    '<select class="input" id="pur-mat" onchange="syncUnits(\'pur\')">'+matOptions()+'</select>'+
+    '<div class="inline-2"><input class="input mono" id="pur-qty" type="number" inputmode="decimal" placeholder="Количество" />'+
+    '<select class="input" id="pur-unit"></select></div>'+
+    '<input class="input" id="pur-supplier" placeholder="Поставщик (необязательно)" />'+
+    '<button class="btn" id="pur-submit">Записать закупку</button>'+
+    '<div class="xs muted">Цену укажет менеджер при подтверждении.</div>'+
+    '</div></div>';
+}
+function consumptionForm(){
+  return '<div class="card"><div class="section-title" style="margin-top:0;">Новый расход</div><div class="form-grid">'+
+    '<select class="input" id="con-mat" onchange="syncUnits(\'con\')">'+matOptions()+'</select>'+
+    '<div class="inline-2"><input class="input mono" id="con-qty" type="number" inputmode="decimal" placeholder="Количество" />'+
+    '<select class="input" id="con-unit"></select></div>'+
+    '<select class="input" id="con-sku">'+skuOptions("Для какого продукта…")+'</select>'+
+    '<input class="input" id="con-notes" placeholder="Заметка (необязательно)" />'+
+    '<button class="btn" id="con-submit">Записать расход</button>'+
+    '</div></div>';
+}
+function productionForm(){
+  return '<div class="card"><div class="section-title" style="margin-top:0;">Новое производство</div><div class="form-grid">'+
+    '<select class="input" id="prod-sku" onchange="syncPacks()">'+skuOptions()+'</select>'+
+    '<input class="input mono" id="prod-boxes" type="number" inputmode="numeric" placeholder="Коробок произведено" oninput="syncPacks()" />'+
+    '<div class="xs muted" id="prod-packs-hint">Пачки рассчитаются автоматически.</div>'+
+    '<button class="btn" id="prod-submit">Записать производство</button>'+
+    '</div></div>';
+}
+
+function syncUnits(prefix){
+  var matId = $("#"+prefix+"-mat").value;
+  $("#"+prefix+"-unit").innerHTML = unitOptionsFor(matId);
+}
+function syncPacks(){
+  var sku = state.skus.find(function(s){ return s.sku_id===$("#prod-sku").value; });
+  var boxes = parseFloat($("#prod-boxes").value)||0;
+  var hint = $("#prod-packs-hint");
+  if (sku && boxes>0) hint.textContent = "= "+fmt(boxes*sku.packs_per_box)+" пачек ("+sku.packs_per_box+" в коробке)";
+  else hint.textContent = "Пачки рассчитаются автоматически.";
+}
+
+function pendingBlock(){
+  var pending = (state.logsCache.purchases||[]).filter(function(p){ return !p.price_confirmed; });
+  if (!pending.length) return "";
+  var html = '<div class="section-title">Подтвердить цену ('+pending.length+')</div>';
+  pending.forEach(function(p){
+    html += '<div class="card tight" id="pend-'+p.id+'">'+
+      '<div class="row"><span class="stk-name">'+esc(p.material)+'</span>'+
+      '<span class="mono small muted">'+fmt(p.quantity_base)+' '+esc(p.unit_base)+'</span></div>'+
+      '<div class="xs muted" style="margin:4px 0 8px;">'+esc(p.date)+' · '+(p.supplier?esc(p.supplier):"без поставщика")+'</div>'+
+      '<div class="inline-2"><input class="input mono" type="number" inputmode="numeric" placeholder="Сумма, сум" id="conf-'+p.id+'" />'+
+      '<button class="btn sm" style="flex:0 0 auto;" onclick="confirmPrice(\''+p.id+'\')">✓</button></div>'+
+      '</div>';
+  });
+  return html;
+}
+
+function logList(type){
+  var logs = state.logsCache[type] || [];
+  if (!logs.length) return '<div class="card">'+emptyState("🗒️", type==="purchases"?"Нет данных — добавьте первую закупку":type==="consumption"?"Нет данных — запишите первый расход":"Нет данных — запишите первое производство")+'</div>';
+  var html = "";
+  logs.forEach(function(l){
+    if (type === "purchases"){
+      var st = l.price_confirmed ? '<span class="pill green">'+money(l.total_sum_uzs)+'</span>' : '<span class="pill amber">без цены</span>';
+      html += '<div class="card tight"><div class="row"><span class="stk-name">'+esc(l.material)+'</span>'+st+'</div>'+
+        '<div class="xs muted" style="margin-top:5px;">'+esc(l.date)+' '+esc(l.time)+' · '+fmt(l.quantity_input)+' '+esc(l.unit_input)+' ('+fmt(l.quantity_base)+' '+esc(l.unit_base)+')'+(l.supplier?(' · '+esc(l.supplier)):'')+'</div></div>';
+    } else if (type === "consumption"){
+      html += '<div class="card tight"><div class="row"><span class="stk-name">'+esc(l.material)+'</span>'+
+        '<span class="mono amber">−'+fmt(l.quantity_base)+' '+esc(l.unit_base)+'</span></div>'+
+        '<div class="xs muted" style="margin-top:5px;">'+esc(l.date)+' '+esc(l.time)+(l.for_sku?(' · → '+esc(l.for_sku)):'')+(l.notes?(' · '+esc(l.notes)):'')+'</div></div>';
+    } else {
+      html += '<div class="card tight"><div class="row"><span class="stk-name">'+esc(l.sku)+'</span>'+
+        '<span class="mono green">'+fmt(l.boxes_produced)+' кор.</span></div>'+
+        '<div class="xs muted" style="margin-top:5px;">'+esc(l.date)+' '+esc(l.time)+' · '+fmt(l.packs_produced)+' пачек</div></div>';
+    }
+  });
+  return html;
+}
+
+function attachLogFormHandlers(){
+  var ps = $("#pur-submit"); if (ps){ syncUnits("pur"); ps.addEventListener("click", submitPurchase); }
+  var cs = $("#con-submit"); if (cs){ syncUnits("con"); cs.addEventListener("click", submitConsumption); }
+  var prs = $("#prod-submit"); if (prs){ prs.addEventListener("click", submitProduction); }
+}
+
+async function submitPurchase(){
+  var mat = $("#pur-mat").value, qty = $("#pur-qty").value, unit = $("#pur-unit").value, sup = $("#pur-supplier").value;
+  if (!mat){ toast("Выберите материал. Проверьте список материалов.", "error"); return; }
+  if (!(parseFloat(qty)>0)){ toast("Укажите количество больше нуля.", "error"); return; }
+  var btn = $("#pur-submit"); btn.disabled = true;
+  var r = await api("log_purchase", { material_id:mat, quantity_input:parseFloat(qty), unit_input:unit, supplier:sup });
+  btn.disabled = false;
+  if (r.success){ toast("Закупка записана", "success"); afterWrite(r); loadLogs("purchases"); }
+  else toast(r.error, "error");
+}
+async function submitConsumption(){
+  var mat = $("#con-mat").value, qty = $("#con-qty").value, unit = $("#con-unit").value, sku = $("#con-sku").value, notes = $("#con-notes").value;
+  if (!mat){ toast("Выберите материал. Проверьте список материалов.", "error"); return; }
+  if (!(parseFloat(qty)>0)){ toast("Укажите количество больше нуля.", "error"); return; }
+  var btn = $("#con-submit"); btn.disabled = true;
+  var r = await api("log_consumption", { material_id:mat, quantity_input:parseFloat(qty), unit_input:unit, for_sku_id:sku, notes:notes });
+  btn.disabled = false;
+  if (r.success){ toast("Расход записан", "success"); afterWrite(r); loadLogs("consumption"); }
+  else toast(r.error, "error");
+}
+async function submitProduction(){
+  var sku = $("#prod-sku").value, boxes = $("#prod-boxes").value;
+  if (!sku){ toast("Выберите продукт. Проверьте список продукции.", "error"); return; }
+  if (!(parseFloat(boxes)>0)){ toast("Укажите количество коробок больше нуля.", "error"); return; }
+  var btn = $("#prod-submit"); btn.disabled = true;
+  var r = await api("log_production", { sku_id:sku, boxes_produced:parseFloat(boxes) });
+  btn.disabled = false;
+  if (r.success){
+    var c = r.data.cost;
+    toast("Производство записано" + (c && c.cost_per_pack_uzs ? (" · с/с "+money(c.cost_per_pack_uzs)+"/пачка") : ""), "success");
+    afterWrite(r); loadLogs("production");
+  } else toast(r.error, "error");
+}
+
+async function confirmPrice(id){
+  var val = $("#conf-"+id).value;
+  if (!(parseFloat(val)>=0)){ toast("Укажите сумму.", "error"); return; }
+  var r = await api("confirm_price", { id:id, total_sum_uzs:parseFloat(val) });
+  if (r.success){ toast("Цена подтверждена", "success"); state.pendingCount = Math.max(0, state.pendingCount-1); renderPendingBadge(); loadLogs("purchases"); }
+  else toast(r.error, "error");
+}
+
+// Refresh alerts/badge after any write that returns them.
+function afterWrite(r){
+  if (r.alerts){ state.alerts = r.alerts; renderAlerts(); }
+}
+
+// ───────── TRANSFER ─────────
+function openTransfer(){
+  openModal("Передать на главный завод",
+    '<div class="form-grid">'+
+    '<select class="input" id="tr-sku">'+skuOptions()+'</select>'+
+    '<input class="input mono" id="tr-boxes" type="number" inputmode="numeric" placeholder="Коробок" />'+
+    '<input class="input" id="tr-notes" placeholder="Заметка (необязательно)" />'+
+    '<button class="btn" id="tr-submit">Подтвердить передачу</button>'+
+    '</div>',
+    function(){
+      $("#tr-submit").addEventListener("click", async function(){
+        var sku = $("#tr-sku").value, boxes = $("#tr-boxes").value;
+        if (!sku){ toast("Выберите продукт.", "error"); return; }
+        if (!(parseFloat(boxes)>0)){ toast("Укажите количество коробок.", "error"); return; }
+        this.disabled = true;
+        var r = await api("transfer_out", { sku_id:sku, boxes_transferred:parseFloat(boxes), notes:$("#tr-notes").value });
+        this.disabled = false;
+        if (r.success){ toast("Передано на главный завод", "success"); closeModal(); loadStock(); }
+        else toast(r.error, "error");
+      });
+    });
+}
+
+// ───────── SETTINGS ─────────
+async function renderSettings(){
+  $("#content").innerHTML = '<div class="center-load"><div class="spinner"></div></div>';
+  var u = await api("manage_users", { op:"list" });
+  var m = await api("manage_materials", { op:"list" });
+  var s = await api("manage_skus", { op:"list" });
+  if (!u.success){ $("#content").innerHTML = errCard(u.error); return; }
+
+  var users = u.data.users || [];
+  var mats = (m.success && m.data.materials) || [];
+  var skus = (s.success && s.data.skus) || [];
+
+  var html = "";
+
+  // Users
+  html += '<div class="section-title">Пользователи</div>';
+  users.forEach(function(usr){
+    html += '<div class="card tight"><div class="row">'+
+      '<div><div class="stk-name">'+esc(usr.name||"—")+(usr.active?"":' <span class="pill red">откл.</span>')+'</div>'+
+      '<div class="xs muted mono">'+esc(usr.telegram_id)+' · '+(ROLE_RU[usr.role]||usr.role)+'</div></div>'+
+      (usr.telegram_id!==state.user.telegram_id ?
+        '<button class="btn-ghost" onclick="editUser(\''+usr.telegram_id+'\',\''+esc(usr.role)+'\','+usr.active+')">изм.</button>' : '<span class="pill">вы</span>')+
+      '</div></div>';
+  });
+  html += '<button class="btn secondary" onclick="addUser()" style="margin-top:6px;">+ Добавить пользователя</button>';
+
+  // Materials
+  html += '<div class="section-title">Материалы (сырьё)</div>';
+  if (!mats.length) html += '<div class="card">'+emptyState("📦","Нет материалов")+'</div>';
+  mats.forEach(function(mt){
+    html += '<div class="card tight"><div class="row">'+
+      '<div><div class="stk-name">'+esc(mt.name)+(mt.active?"":' <span class="pill red">скрыт</span>')+'</div>'+
+      '<div class="xs muted">'+esc(mt.unit)+' · '+(CAT_RU[mt.category]||mt.category)+' · порог '+fmt(mt.low_stock_threshold)+'</div></div>'+
+      '<button class="btn-ghost" onclick=\'editMaterial('+JSON.stringify(mt).replace(/'/g,"&#39;")+')\'>изм.</button>'+
+      '</div></div>';
+  });
+  html += '<button class="btn secondary" onclick="addMaterial()" style="margin-top:6px;">+ Добавить материал</button>';
+
+  // SKUs
+  html += '<div class="section-title">Продукция (SKU)</div>';
+  if (!skus.length) html += '<div class="card">'+emptyState("🏷️","Нет продукции")+'</div>';
+  skus.forEach(function(sk){
+    html += '<div class="card tight"><div class="row">'+
+      '<div><div class="stk-name">'+esc(sk.name)+(sk.active?"":' <span class="pill red">скрыт</span>')+'</div>'+
+      '<div class="xs muted">'+(sk.flavour?esc(sk.flavour)+' · ':'')+fmt(sk.weight_g)+' г · '+sk.packs_per_box+' пачек/кор</div></div>'+
+      '<button class="btn-ghost" onclick=\'editSku('+JSON.stringify(sk).replace(/'/g,"&#39;")+')\'>изм.</button>'+
+      '</div></div>';
+  });
+  html += '<button class="btn secondary" onclick="addSku()" style="margin-top:6px;">+ Добавить продукт</button>';
+
+  if (state.user.role === "owner"){
+    html += '<div class="section-title">Владелец</div>'+
+      '<div class="card tight"><div class="xs muted">Переключатель ролей в шапке меняет только отображение интерфейса — ваша роль в системе остаётся «Владелец».</div></div>';
+  }
+
+  $("#content").innerHTML = html;
+}
+
+function roleSelect(id, current){
+  return '<select class="input" id="'+id+'">'+["worker","manager","owner","viewer"].map(function(r){
+    return '<option value="'+r+'"'+(r===current?" selected":"")+'>'+ROLE_RU[r]+'</option>';
+  }).join("")+'</select>';
+}
+function catSelect(id, current){
+  return '<select class="input" id="'+id+'">'+["seasoning","oil","packaging"].map(function(c){
+    return '<option value="'+c+'"'+(c===current?" selected":"")+'>'+CAT_RU[c]+'</option>';
+  }).join("")+'</select>';
+}
+
+function addUser(){
+  openModal("Новый пользователь",
+    '<div class="form-grid">'+
+    '<input class="input mono" id="nu-id" type="number" placeholder="Telegram ID" />'+
+    '<input class="input" id="nu-name" placeholder="Имя" />'+
+    roleSelect("nu-role","worker")+
+    '<button class="btn" id="nu-save">Добавить</button></div>',
+    function(){
+      $("#nu-save").addEventListener("click", async function(){
+        var r = await api("manage_users", { op:"add", payload:{ telegram_id:$("#nu-id").value.trim(), name:$("#nu-name").value.trim(), role:$("#nu-role").value } });
+        if (r.success){ toast("Пользователь добавлен", "success"); closeModal(); renderSettings(); }
+        else toast(r.error, "error");
+      });
+    });
+}
+function editUser(id, role, active){
+  openModal("Пользователь",
+    '<div class="form-grid"><div class="xs muted mono">ID: '+esc(id)+'</div>'+
+    roleSelect("eu-role", role)+
+    '<button class="btn" id="eu-save">Сохранить роль</button>'+
+    '<button class="btn danger" id="eu-toggle">'+(active?"Отключить доступ":"Включить доступ")+'</button></div>',
+    function(){
+      $("#eu-save").addEventListener("click", async function(){
+        var r = await api("manage_users", { op:"update", payload:{ telegram_id:id, role:$("#eu-role").value } });
+        if (r.success){ toast("Сохранено", "success"); closeModal(); renderSettings(); } else toast(r.error,"error");
+      });
+      $("#eu-toggle").addEventListener("click", async function(){
+        var r = await api("manage_users", { op:"update", payload:{ telegram_id:id, active:!active } });
+        if (r.success){ toast("Готово", "success"); closeModal(); renderSettings(); } else toast(r.error,"error");
+      });
+    });
+}
+
+function addMaterial(){
+  openModal("Новый материал",
+    '<div class="form-grid">'+
+    '<input class="input" id="nm-name" placeholder="Название (напр. Соль)" />'+
+    '<div class="inline-2"><input class="input" id="nm-unit" placeholder="Базовая ед. (кг)" value="кг" />'+catSelect("nm-cat","seasoning")+'</div>'+
+    '<input class="input" id="nm-units" placeholder="Ед. ввода: кг:1, мешок 25кг:25" />'+
+    '<input class="input mono" id="nm-thr" type="number" placeholder="Порог низкого остатка (0 = выкл)" value="0" />'+
+    '<div class="xs muted">Ед. ввода — список «название:множитель» через запятую. Множитель переводит в базовую единицу.</div>'+
+    '<button class="btn" id="nm-save">Добавить</button></div>',
+    function(){
+      $("#nm-save").addEventListener("click", async function(){
+        if (!$("#nm-name").value.trim()){ toast("Укажите название","error"); return; }
+        var r = await api("manage_materials", { op:"add", payload:{
+          name:$("#nm-name").value.trim(), unit:$("#nm-unit").value.trim()||"ед.",
+          category:$("#nm-cat").value, input_units:$("#nm-units").value.trim(),
+          low_stock_threshold:parseFloat($("#nm-thr").value)||0
+        }});
+        if (r.success){ toast("Материал добавлен","success"); closeModal(); renderSettings(); } else toast(r.error,"error");
+      });
+    });
+}
+function editMaterial(mt){
+  openModal("Материал",
+    '<div class="form-grid">'+
+    '<input class="input" id="em-name" value="'+esc(mt.name)+'" />'+
+    '<div class="inline-2"><input class="input" id="em-unit" value="'+esc(mt.unit)+'" />'+catSelect("em-cat",mt.category)+'</div>'+
+    '<input class="input" id="em-units" value="'+esc((mt.unit_options||[]).map(function(o){return o.label+":"+o.factor;}).join(", "))+'" placeholder="кг:1, мешок 25кг:25" />'+
+    '<input class="input mono" id="em-thr" type="number" value="'+mt.low_stock_threshold+'" />'+
+    '<button class="btn" id="em-save">Сохранить</button>'+
+    '<button class="btn danger" id="em-del">'+(mt.active?"Скрыть материал":"Вернуть материал")+'</button></div>',
+    function(){
+      $("#em-save").addEventListener("click", async function(){
+        var r = await api("manage_materials", { op:"update", payload:{
+          material_id:mt.material_id, name:$("#em-name").value.trim(), unit:$("#em-unit").value.trim(),
+          category:$("#em-cat").value, input_units:$("#em-units").value.trim(),
+          low_stock_threshold:parseFloat($("#em-thr").value)||0
+        }});
+        if (r.success){ toast("Сохранено","success"); closeModal(); renderSettings(); } else toast(r.error,"error");
+      });
+      $("#em-del").addEventListener("click", async function(){
+        var r = await api("manage_materials", { op: mt.active?"delete":"update", payload: mt.active?{material_id:mt.material_id}:{material_id:mt.material_id, active:true} });
+        if (r.success){ toast("Готово","success"); closeModal(); renderSettings(); } else toast(r.error,"error");
+      });
+    });
+}
+
+function addSku(){
+  openModal("Новый продукт (SKU)",
+    '<div class="form-grid">'+
+    '<input class="input" id="ns-name" placeholder="Название (Приправа Куриная 50г)" />'+
+    '<input class="input" id="ns-flav" placeholder="Вкус (куриная)" />'+
+    '<div class="inline-2"><input class="input mono" id="ns-weight" type="number" placeholder="Вес, г" />'+
+    '<input class="input mono" id="ns-ppb" type="number" placeholder="Пачек в коробке" /></div>'+
+    '<button class="btn" id="ns-save">Добавить</button></div>',
+    function(){
+      $("#ns-save").addEventListener("click", async function(){
+        if (!$("#ns-name").value.trim()){ toast("Укажите название","error"); return; }
+        var r = await api("manage_skus", { op:"add", payload:{
+          name:$("#ns-name").value.trim(), flavour:$("#ns-flav").value.trim(),
+          weight_g:parseFloat($("#ns-weight").value)||0, packs_per_box:parseInt($("#ns-ppb").value)||1
+        }});
+        if (r.success){ toast("Продукт добавлен","success"); closeModal(); renderSettings(); } else toast(r.error,"error");
+      });
+    });
+}
+function editSku(sk){
+  openModal("Продукт (SKU)",
+    '<div class="form-grid">'+
+    '<input class="input" id="es-name" value="'+esc(sk.name)+'" />'+
+    '<input class="input" id="es-flav" value="'+esc(sk.flavour)+'" placeholder="Вкус" />'+
+    '<div class="inline-2"><input class="input mono" id="es-weight" type="number" value="'+sk.weight_g+'" />'+
+    '<input class="input mono" id="es-ppb" type="number" value="'+sk.packs_per_box+'" /></div>'+
+    '<button class="btn" id="es-save">Сохранить</button>'+
+    '<button class="btn danger" id="es-del">'+(sk.active?"Скрыть продукт":"Вернуть продукт")+'</button></div>',
+    function(){
+      $("#es-save").addEventListener("click", async function(){
+        var r = await api("manage_skus", { op:"update", payload:{
+          sku_id:sk.sku_id, name:$("#es-name").value.trim(), flavour:$("#es-flav").value.trim(),
+          weight_g:parseFloat($("#es-weight").value)||0, packs_per_box:parseInt($("#es-ppb").value)||1
+        }});
+        if (r.success){ toast("Сохранено","success"); closeModal(); renderSettings(); } else toast(r.error,"error");
+      });
+      $("#es-del").addEventListener("click", async function(){
+        var r = await api("manage_skus", { op: sk.active?"delete":"update", payload: sk.active?{sku_id:sk.sku_id}:{sku_id:sk.sku_id, active:true} });
+        if (r.success){ toast("Готово","success"); closeModal(); renderSettings(); } else toast(r.error,"error");
+      });
+    });
+}
+
+// ───────── modal ─────────
+function openModal(title, bodyHtml, onMount){
+  $("#modal-title").textContent = title;
+  $("#modal-body").innerHTML = bodyHtml;
+  $("#modal-overlay").classList.add("show");
+  if (onMount) onMount();
+}
+function closeModal(){ $("#modal-overlay").classList.remove("show"); }
+$("#modal-overlay").addEventListener("click", function(e){ if (e.target.id==="modal-overlay") closeModal(); });
+
+// ───────── go ─────────
+initAuth();
+</script>
+</body>
+</html>
