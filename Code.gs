@@ -14,8 +14,9 @@
  */
 
 // ───────────────────────── Config ─────────────────────────
-// Leave SPREADSHEET_ID empty when the script is bound to its Sheet (the normal case).
-var SPREADSHEET_ID = '';
+// Target sheet "FinApp - Maccaldo". Works whether the script is bound to this Sheet
+// or is a standalone Apps Script project. Leave empty to fall back to the active Sheet.
+var SPREADSHEET_ID = '1dArwQHNH5e5gLaelyWS6og5dossjd5o_HgLNEfLsX18';
 var OWNER_ID   = '1398614118';
 var OWNER_NAME = 'Abdulaziz';
 
