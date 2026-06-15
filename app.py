@@ -59,6 +59,43 @@ with open(os.path.join(HERE, "webapp", "index.html"), "rb") as _f:
     INDEX_BYTES = _f.read()
 
 POOL = None
+DB_ERROR = "База данных ещё не инициализирована."
+
+
+def resolve_db_url():
+    for k in ("DATABASE_URL", "DATABASE_PRIVATE_URL", "POSTGRES_URL", "POSTGRESQL_URL"):
+        v = os.getenv(k)
+        if v:
+            return v
+    host = os.getenv("PGHOST")
+    if host:
+        return "postgresql://%s:%s@%s:%s/%s" % (
+            os.getenv("PGUSER", "postgres"), os.getenv("PGPASSWORD", ""),
+            host, os.getenv("PGPORT", "5432"), os.getenv("PGDATABASE", "railway"))
+    return ""
+
+
+def ensure_db():
+    """Lazily connect + init schema. Returns True if DB is ready, else sets DB_ERROR."""
+    global POOL, DB_ERROR
+    if POOL is not None:
+        return True
+    url = resolve_db_url()
+    if not url:
+        DB_ERROR = ("База данных не подключена. В Railway: + New → Database → PostgreSQL, "
+                    "и проверьте, что у сервиса есть переменная DATABASE_URL.")
+        return False
+    try:
+        POOL = ThreadedConnectionPool(1, 10, url)
+        init_db()
+        DB_ERROR = None
+        log.info("PostgreSQL connected, schema ready.")
+        return True
+    except Exception as e:
+        POOL = None
+        DB_ERROR = "Не удалось подключиться к базе данных: " + str(e)
+        log.error(DB_ERROR)
+        return False
 
 
 # ── Small pure helpers (unit-testable without a DB) ──────────────────────────
@@ -135,11 +172,6 @@ class Denied(Exception):
 
 
 # ── DB ───────────────────────────────────────────────────────────────────────
-def init_pool():
-    global POOL
-    POOL = ThreadedConnectionPool(1, 10, DATABASE_URL)
-
-
 @contextmanager
 def db():
     conn = POOL.getconn()
@@ -722,6 +754,8 @@ def handle(body):
     tid = str(tid) if tid is not None else ""
     if WEB_ACCESS_CODE and str(body.get("access_code") or "") != WEB_ACCESS_CODE:
         return err("Неверный код доступа")
+    if not ensure_db():
+        return err(DB_ERROR)
     fn = ACTIONS.get(action)
     if not fn:
         return err("Неизвестное действие: " + action)
@@ -756,7 +790,9 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             self._send(200, INDEX_BYTES, "text/html; charset=utf-8")
         elif path == "/health":
-            self._send(200, b'{"status":"ok","version":"' + APP_VERSION.encode() + b'"}')
+            body = json.dumps({"status": "ok", "version": APP_VERSION,
+                               "db": ensure_db(), "db_error": DB_ERROR}).encode("utf-8")
+            self._send(200, body)
         else:
             self._send(404, b'{"error":"not found"}')
 
@@ -861,9 +897,9 @@ def run_bot():
 
 # ── Entry ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if not DATABASE_URL:
-        raise SystemExit("DATABASE_URL не задан. Добавьте PostgreSQL в Railway.")
-    init_pool()
-    init_db()
+    # Never hard-crash: start the web server regardless, so the site loads and can
+    # report a clear error (e.g. "add PostgreSQL") instead of going dark.
+    if not ensure_db():
+        log.warning("Запуск без базы данных: %s", DB_ERROR)
     threading.Thread(target=run_bot, daemon=True).start()
     run_server()
