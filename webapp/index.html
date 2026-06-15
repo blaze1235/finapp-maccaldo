@@ -187,7 +187,7 @@
 <script>
 "use strict";
 var API_URL = window.API_OVERRIDE || "/api";
-var EXPECTED_VERSION = "3";
+var EXPECTED_VERSION = "4";
 var RANK = { workshop:1, manager:2, owner:3 };
 var ROLE_RU = { owner:"Владелец", manager:"Менеджер", workshop:"Цех приправ" };
 var CAT_RU = { seasoning:"Приправа", oil:"Масло", packaging:"Упаковка" };
@@ -301,8 +301,8 @@ function render(){
 function alertHtml(){
   var h="";
   if(S.stale){
-    h+='<div id="alert" class="show" style="background:var(--rdBg);color:var(--rd);"><span>⚠️</span>'+
-       '<span>Бэкенд Apps Script устарел. Переразверните <b>Code.gs</b> (Deploy → Manage deployments → New version).</span></div>';
+    h+='<div id="alert" class="show" style="background:var(--rdBg);color:var(--rd);" onclick="location.reload()"><span>⚠️</span>'+
+       '<span>Доступна новая версия приложения. Нажмите, чтобы обновить.</span></div>';
   }
   var a=S.D.alerts||[];
   if(a.length){
