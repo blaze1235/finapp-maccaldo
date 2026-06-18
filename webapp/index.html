@@ -59,13 +59,23 @@
   .chip{font-size:10px;font-weight:700;letter-spacing:.6px;padding:4px 9px;border-radius:8px;display:inline-block;text-transform:uppercase;font-family:'Syne',sans-serif;}
   .chip-g{background:var(--grBg);color:var(--gr);} .chip-a{background:var(--amBg);color:var(--am);}
   .chip-r{background:var(--rdBg);color:var(--rd);} .chip-b{background:var(--blBg);color:var(--bl);}
-  .chip-n{background:var(--bg);color:var(--ink2);}
+  .chip-p{background:var(--puBg);color:var(--pu);} .chip-n{background:var(--bg);color:var(--ink2);}
 
   /* wallet / hero */
   .wallet{background:var(--dk);border-radius:22px;padding:20px;margin-bottom:10px;position:relative;overflow:hidden;color:#fff;}
   .wallet::before{content:'';position:absolute;top:-40px;right:-40px;width:140px;height:140px;border-radius:50%;background:rgba(255,255,255,.04);}
   .w-lbl{font-size:11px;color:rgba(255,255,255,.55);font-weight:600;}
   .w-val{font-family:'Syne',sans-serif;font-size:30px;font-weight:800;margin-top:4px;}
+  .w-row{display:flex;justify-content:space-between;align-items:center;margin-top:14px;}
+  .w-row .syne{color:#fff;font-size:15px;font-weight:700;}
+  .hello{font-size:15px;color:var(--ink2);margin:2px 4px 12px;}
+  .hello b{color:var(--ink);}
+  .qa{display:flex;gap:8px;margin-bottom:10px;}
+  .qa-btn{flex:1;border-radius:18px;padding:18px 12px;display:flex;flex-direction:column;align-items:center;gap:8px;font-family:'Syne',sans-serif;font-weight:700;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:#fff;transition:transform .1s;}
+  .qa-btn:active{transform:scale(.97);}
+  .qa-prod{background:var(--gr);} .qa-buy{background:var(--ink);}
+  .qa-i{font-size:26px;}
+  .pend-card{cursor:pointer;}
 
   .kpi{display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr;background:var(--sur);border-radius:18px;margin-bottom:8px;overflow:hidden;}
   .kpi .div{background:var(--bdr);}
@@ -227,15 +237,28 @@ async function api(action, extra){
 function initAuth(){
   if(tg){ try{ tg.ready(); tg.expand(); }catch(e){} }
   var fromTg = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? String(tg.initDataUnsafe.user.id) : null;
-  if(fromTg){ S.telegramId=fromTg; doLogin(true); }
-  else{
-    $("#lbtn").addEventListener("click", function(){
-      var id=$("#lid").value.trim();
-      if(!/^\d+$/.test(id)){ toast("Введите числовой Telegram ID","error"); return; }
-      S.telegramId=id; S.accessCode=$("#lcode").value.trim(); doLogin(false);
-    });
-    $("#lid").addEventListener("keydown",function(e){ if(e.key==="Enter") $("#lbtn").click(); });
+  S.isTelegram = !!fromTg;
+
+  $("#lbtn").addEventListener("click", function(){
+    var id=$("#lid").value.trim();
+    if(!/^\d+$/.test(id)){ toast("Введите числовой Telegram ID","error"); return; }
+    S.telegramId=id; S.accessCode=$("#lcode").value.trim(); doLogin(false);
+  });
+  $("#lid").addEventListener("keydown",function(e){ if(e.key==="Enter") $("#lbtn").click(); });
+
+  if(fromTg){ S.telegramId=fromTg; doLogin(true); return; }
+
+  // Web browser: restore saved login if present.
+  var saved=null; try{ saved=JSON.parse(localStorage.getItem("finapp_login")||"null"); }catch(e){}
+  if(saved && saved.id){
+    $("#lid").value=saved.id;
+    S.telegramId=saved.id; S.accessCode=saved.code||"";
+    doLogin(true);
   }
+}
+function logout(){
+  try{ localStorage.removeItem("finapp_login"); }catch(e){}
+  location.reload();
 }
 async function doLogin(silent){
   if(!silent){ $("#lbtn").disabled=true; $("#lbtn").textContent="Вход…"; }
@@ -246,6 +269,7 @@ async function doLogin(silent){
     return;
   }
   S.user=r.data; S.effRole=r.data.role;
+  if(!S.isTelegram){ try{ localStorage.setItem("finapp_login", JSON.stringify({id:S.telegramId, code:S.accessCode})); }catch(e){} }
   $("#login").style.display="none";
   $("#appmain").style.display="flex";
   $("#rolechip").textContent = ROLE_RU[S.user.role]||S.user.role;
@@ -273,7 +297,7 @@ async function boot(showSpinner){
 
 /* ── Nav ── */
 function navItems(){
-  var items=[{id:"home",i:"⊞",l:"Главная"},{id:"stock",i:"📦",l:"Склад"},{id:"ops",i:"＋",l:"Записать"}];
+  var items=[{id:"home",i:"⊞",l:"Главная"},{id:"stock",i:"📦",l:"Склад"},{id:"ops",i:"＋",l:"Записать"},{id:"hist",i:"🕘",l:"История"}];
   if(rank()>=2) items.push({id:"settings",i:"⚙",l:"Настройки"});
   return items;
 }
@@ -289,12 +313,13 @@ function renderNav(){
 
 function render(){
   if(rank()<2 && (S.tab==="settings")) S.tab="home";
-  $("#htitle").textContent = {home:"Главная",stock:"Склад",ops:"Записать",settings:"Настройки"}[S.tab];
+  $("#htitle").textContent = {home:"Главная",stock:"Склад",ops:"Записать",hist:"История",settings:"Настройки"}[S.tab];
   $("#rolechip").textContent = (ROLE_RU[S.effRole]||S.effRole)+(S.effRole!==S.user.role?" · обзор":"");
   var m=$("#main"); m.className="anim";
   if(S.tab==="home") renderHome(m);
   else if(S.tab==="stock") renderStock(m);
   else if(S.tab==="ops") renderOps(m);
+  else if(S.tab==="hist") renderHistory(m);
   else if(S.tab==="settings") renderSettings(m);
 }
 
@@ -317,60 +342,109 @@ function empty(ico,txt){ return '<div class="empty"><div class="e">'+ico+'</div>
 function renderHome(m){
   var D=S.D, withP=canSeePrices();
   var raw=D.stock.raw_materials||[], fin=D.stock.finished_goods||[];
+  var lowCount=(D.alerts||[]).length;
+  var todayPacks=(D.today_production||[]).reduce(function(s,x){return s+x.packs;},0);
   var h=alertHtml();
 
-  if(withP){
-    var rawVal=raw.reduce(function(s,x){return s+(x.total_value||0);},0);
-    var finVal=fin.reduce(function(s,x){return s+(x.total_value||0);},0);
-    h+='<div class="wallet"><div class="w-lbl">Оценка склада</div>'+
-       '<div class="w-val mono">'+money(rawVal+finVal)+'</div>'+
-       '<div style="display:flex;gap:18px;margin-top:14px;">'+
-       '<div><div class="w-lbl">Сырьё</div><div class="syne mono" style="font-size:15px;font-weight:700;margin-top:2px;">'+fmt(rawVal)+'</div></div>'+
-       '<div><div class="w-lbl">Продукция</div><div class="syne mono" style="font-size:15px;font-weight:700;margin-top:2px;">'+fmt(finVal)+'</div></div>'+
-       '</div></div>';
-  }
+  // Greeting.
+  h+='<div class="hello">Здравствуйте, <b>'+esc((S.user.name||"").split(" ")[0]||"коллега")+'</b> 👋</div>';
 
-  var todayPacks=(D.today_production||[]).reduce(function(s,x){return s+x.packs;},0);
-  var lowCount=(D.alerts||[]).length;
-  h+='<div class="kpi">'+
-     '<div class="kpi-c"><div class="kpi-v mono">'+fmt(todayPacks)+'</div><div class="kpi-l">Пачек сегодня</div></div>'+
-     '<div class="div"></div>'+
-     '<div class="kpi-c"><div class="kpi-v mono">'+fmt(withP?D.pending_count:0)+'</div><div class="kpi-l">Ждут цену</div></div>'+
-     '<div class="div"></div>'+
-     '<div class="kpi-c"><div class="kpi-v mono" style="color:'+(lowCount?'var(--rd)':'var(--ink)')+'">'+fmt(lowCount)+'</div><div class="kpi-l">Мало на складе</div></div>'+
+  // Primary quick actions.
+  h+='<div class="qa">'+
+     '<button class="qa-btn qa-prod" id="qaProd"><span class="qa-i">🏭</span>Производство</button>'+
+     '<button class="qa-btn qa-buy" id="qaBuy"><span class="qa-i">📥</span>Закупка</button>'+
      '</div>';
 
-  h+='<div class="ph">Состояние сырья</div>';
+  // Manager: inventory value + today, and pending shortcut.
+  if(withP){
+    var totVal=raw.reduce(function(s,x){return s+(x.total_value||0);},0)+fin.reduce(function(s,x){return s+(x.total_value||0);},0);
+    h+='<div class="wallet"><div class="w-lbl">Оценка склада</div><div class="w-val mono">'+money(totVal)+'</div>'+
+       '<div class="w-row"><span class="w-lbl">Выпущено сегодня</span><span class="syne mono">'+fmt(todayPacks)+' пачек</span></div></div>';
+    if(D.pending_count>0){
+      h+='<div class="card pend-card" id="qaPend"><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--amBg)">🟡</div>'+
+         '<div><div class="nm">Подтвердить цены</div><div class="sub">'+D.pending_count+' закупок ожидают</div></div></div><span class="chip chip-a">открыть →</span></div></div>';
+    }
+  } else {
+    h+='<div class="kpi"><div class="kpi-c"><div class="kpi-v mono">'+fmt(todayPacks)+'</div><div class="kpi-l">Пачек сегодня</div></div>'+
+       '<div class="div"></div><div class="kpi-c"><div class="kpi-v mono" style="color:'+(lowCount?'var(--rd)':'var(--ink)')+'">'+fmt(lowCount)+'</div><div class="kpi-l">Мало на складе</div></div></div>';
+  }
+
+  // Stock health — signature element.
+  h+='<div class="ph">Склад сырья'+(lowCount?' · <span style="color:var(--rd)">'+lowCount+' мало</span>':'')+'</div>';
   if(raw.length){
     h+='<div class="card"><div class="dots">'+raw.map(function(x){
       return '<div class="dotw"><span class="dot '+x.health+'"></span><span class="dot-l">'+esc(x.name)+'</span></div>';
     }).join("")+'</div></div>';
   } else h+='<div class="card">'+empty("📦","Нет материалов — добавьте в Настройках")+'</div>';
 
-  if(withP && D.pending_count>0){
-    h+='<div class="ph">Требует внимания</div><div class="card"><div class="row">'+
-       '<span class="nm">🟡 Закупки без цены</span><button class="btn btn-sm btn-ink" id="goPend">'+D.pending_count+' — подтвердить</button></div></div>';
-  }
-
-  h+='<div class="ph">Производство сегодня</div>';
   if((D.today_production||[]).length){
-    h+='<div class="card">'+D.today_production.map(function(p,i){
+    h+='<div class="ph">Произведено сегодня</div><div class="card">'+D.today_production.map(function(p){
       return '<div class="row rowline"><span class="nm">'+esc(p.name)+'</span><span class="num mono">'+fmt(p.packs)+' пачек</span></div>';
     }).join("")+'</div>';
-  } else h+='<div class="card">'+empty("🏭","Сегодня производство ещё не записано")+'</div>';
+  }
 
   h+='<div class="ph">Последнее</div>';
   if((D.recent||[]).length){
-    h+='<div class="card">'+D.recent.map(function(it,i){
+    h+='<div class="card">'+D.recent.map(function(it){
       var bg=it.type==="production"?"var(--grBg)":"var(--blBg)", ico=it.type==="production"?"🏭":"📥";
       return '<div class="row rowline"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:'+bg+'">'+ico+'</div>'+
         '<div><div class="nm">'+esc(it.title)+'</div><div class="sub">'+esc(it.date)+' '+esc(it.time)+'</div></div></div>'+
         '<span class="num mono">'+esc(it.detail)+'</span></div>';
-    }).join("")+'</div>';
-  } else h+='<div class="card">'+empty("🗒️","Нет данных — запишите первую операцию")+'</div>';
+    }).join("")+'</div>'+
+    '<button class="btn btn-gray btn-sm" id="goHist" style="width:100%;margin-top:4px;">Вся история →</button>';
+  } else h+='<div class="card">'+empty("🗒️","Нет операций — запишите первую через «Записать»")+'</div>';
+
+  if(!S.isTelegram) h+='<button class="ghost" style="display:block;margin:20px auto 0;" onclick="logout()">Выйти · '+esc(S.telegramId)+'</button>';
 
   m.innerHTML=h;
-  var gp=$("#goPend"); if(gp) gp.addEventListener("click",function(){ S.tab="ops"; S.opMode="purchase"; renderNav(); render(); });
+  function go(tab,mode){ if(mode) S.opMode=mode; S.tab=tab; renderNav(); render(); }
+  var x;
+  if(x=$("#qaProd")) x.addEventListener("click",function(){ go("ops","production"); });
+  if(x=$("#qaBuy"))  x.addEventListener("click",function(){ go("ops","purchase"); });
+  if(x=$("#qaPend")) x.addEventListener("click",function(){ go("ops","purchase"); });
+  if(x=$("#goHist")) x.addEventListener("click",function(){ go("hist"); });
+}
+
+/* ── HISTORY ── */
+function renderHistory(m){
+  var D=S.D, withP=canSeePrices();
+  S.histFilter = S.histFilter || "all";
+  var P=(D.logs&&D.logs.purchases)||[], R=(D.logs&&D.logs.production)||[], T=(D.logs&&D.logs.transfers)||[];
+
+  var items=[];
+  P.forEach(function(l){ items.push({k:"pur", sort:l.date+" "+l.time, l:l}); });
+  R.forEach(function(l){ items.push({k:"prod", sort:l.date+" "+l.time, l:l}); });
+  T.forEach(function(l){ items.push({k:"tr", sort:l.date+" "+l.time, l:l}); });
+  items.sort(function(a,b){ return a.sort<b.sort?1:(a.sort>b.sort?-1:0); });
+
+  var f=S.histFilter;
+  var filtered=items.filter(function(it){ return f==="all"||(f==="pur"&&it.k==="pur")||(f==="prod"&&it.k==="prod")||(f==="tr"&&it.k==="tr"); });
+
+  var chips=[["all","Все"],["prod","Производство"],["pur","Закупки"],["tr","Передачи"]];
+  var h='<div class="seg">'+chips.map(function(c){ return '<b class="'+(f===c[0]?"on":"")+'" data-hf="'+c[0]+'">'+c[1]+'</b>'; }).join("")+'</div>';
+
+  if(!filtered.length){ h+='<div class="card">'+empty("🕘","Нет операций в этой категории")+'</div>'; }
+  filtered.forEach(function(it){
+    var l=it.l;
+    if(it.k==="pur"){
+      var amt = l.price_confirmed ? '<span class="chip chip-g">'+(withP&&l.total_sum_uzs!=null?money(l.total_sum_uzs):"оплачено")+'</span>' : '<span class="chip chip-a">без цены</span>';
+      h+='<div class="card"><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--blBg)">📥</div>'+
+         '<div><div class="nm">'+esc(l.material)+'</div><div class="sub">'+esc(l.date)+' '+esc(l.time)+' · '+fmt(l.quantity_input)+' '+esc(l.unit_input)+(l.supplier?' · '+esc(l.supplier):'')+'</div></div></div>'+amt+'</div></div>';
+    } else if(it.k==="prod"){
+      var mats=(l.materials||[]).map(function(mm){ return esc(mm.material)+" "+fmt(mm.quantity_base)+" "+esc(mm.unit); }).join(" · ");
+      h+='<div class="card"><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--grBg)">🏭</div>'+
+         '<div><div class="nm">'+esc(l.sku)+'</div><div class="sub">'+esc(l.date)+' '+esc(l.time)+' · '+fmt(l.packs_produced)+' пачек</div></div></div>'+
+         (withP&&l.cost_per_pack_uzs!=null?'<span class="chip chip-b">'+fmt(l.cost_per_pack_uzs)+' /пачка</span>':'')+'</div>'+
+         (mats?'<div class="sub" style="margin-top:8px;">↳ '+mats+'</div>':'')+'</div>';
+    } else {
+      h+='<div class="card"><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--puBg)">🚚</div>'+
+         '<div><div class="nm">'+esc(l.sku)+'</div><div class="sub">'+esc(l.date)+' '+esc(l.time)+' · на главный завод'+(l.notes?' · '+esc(l.notes):'')+'</div></div></div>'+
+         '<span class="chip chip-p">−'+fmt(l.packs_transferred)+' пачек</span></div></div>';
+    }
+  });
+
+  m.innerHTML=h;
+  m.querySelectorAll("[data-hf]").forEach(function(b){ b.addEventListener("click",function(){ S.histFilter=b.dataset.hf; renderHistory(m); }); });
 }
 
 /* ── STOCK ── */
@@ -397,6 +471,23 @@ function renderStock(m){
         '</div></div></div>';
     });
   } else h+='<div class="card">'+empty("🏷️","Нет продукции — добавьте SKU в Настройках")+'</div>';
+
+  // Себестоимость per product (owner/manager only) — latest run per SKU with breakdown.
+  if(withP){
+    var prodLogs=(D.logs&&D.logs.production)||[];
+    var seen={}, costItems=[];
+    prodLogs.forEach(function(l){ if(!seen[l.sku]){ seen[l.sku]=true; costItems.push(l); } });
+    h+='<div class="ph">Себестоимость продукции</div>';
+    if(costItems.length){
+      costItems.forEach(function(l){
+        var mats=(l.materials||[]).map(function(mm){ return esc(mm.material)+" "+fmt(mm.quantity_base)+" "+esc(mm.unit); }).join(" · ");
+        h+='<div class="card"><div class="row"><div><div class="nm">'+esc(l.sku)+'</div><div class="sub">прогон '+esc(l.date)+' · '+fmt(l.packs_produced)+' пачек</div></div>'+
+          '<div style="text-align:right;"><span class="chip chip-b">'+fmt(l.cost_per_pack_uzs)+' /пачка</span>'+
+          '<div class="sub mono" style="margin-top:5px;">'+fmt(l.cost_per_box_uzs)+' /коробка</div></div></div>'+
+          (mats?'<div class="sub" style="margin-top:8px;">↳ '+mats+'</div>':'')+'</div>';
+      });
+    } else h+='<div class="card">'+empty("🧮","Себестоимость появится после первого производства")+'</div>';
+  }
 
   if(rank()>=2 && fin.length) h+='<button class="btn btn-gray" style="margin-top:10px;" id="trBtn">🚚 Передать на главный завод</button>';
   m.innerHTML=h;

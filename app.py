@@ -455,6 +455,14 @@ def get_production_logs(conn, limit, with_prices):
     return out
 
 
+def get_transfer_logs(conn, limit):
+    sn = sku_name_map(conn)
+    return [{"id": str(r["id"]), "date": str(r["entry_date"]), "time": r["entry_time"],
+             "sku": sn.get(r["sku_id"], str(r["sku_id"])), "packs_transferred": r2(r["packs_transferred"]),
+             "notes": r["notes"]}
+            for r in q(conn, "SELECT * FROM transfers_out ORDER BY created_at DESC LIMIT %s", [limit])]
+
+
 def get_today_production(conn):
     sn = sku_name_map(conn)
     today, _ = now_parts()
@@ -514,7 +522,9 @@ def act_bootstrap(tid):
             "materials": get_materials(conn),
             "skus": get_skus(conn),
             "stock": get_stock(conn, wp),
-            "logs": {"purchases": get_purchase_logs(conn, 60, wp), "production": get_production_logs(conn, 60, wp)},
+            "logs": {"purchases": get_purchase_logs(conn, 80, wp),
+                     "production": get_production_logs(conn, 80, wp),
+                     "transfers": get_transfer_logs(conn, 80)},
             "pending": pending,
             "pending_count": len(pending),
             "today_production": get_today_production(conn),
@@ -831,6 +841,16 @@ def run_bot():
     import telebot
     from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
     bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+
+    # Register the Mini App as the bot's menu button (the button next to the input
+    # field) so it opens automatically for every user — no BotFather setup needed.
+    if WEBAPP_URL.startswith("https://"):
+        try:
+            from telebot.types import MenuButtonWebApp
+            bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="FinApp", web_app=WebAppInfo(url=WEBAPP_URL)))
+            log.info("Telegram menu button → Mini App (%s)", WEBAPP_URL)
+        except Exception as e:
+            log.warning("set_chat_menu_button недоступен: %s", e)
 
     def menu_kb():
         kb = InlineKeyboardMarkup()
