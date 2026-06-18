@@ -198,6 +198,11 @@ def q1(conn, sql, params=None):
         return cur.fetchone()
 
 
+def ex(conn, sql, params=None):
+    with conn.cursor() as cur:
+        cur.execute(sql, params or [])
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
   telegram_id  BIGINT PRIMARY KEY,
@@ -290,6 +295,9 @@ def init_db():
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(SCHEMA)
+        # Idempotent migrations for existing databases.
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE consumption ADD COLUMN IF NOT EXISTS cost_uzs NUMERIC NOT NULL DEFAULT 0")
         with conn.cursor() as cur:
             cur.execute("INSERT INTO users(telegram_id,name,role) VALUES(%s,%s,'owner') ON CONFLICT (telegram_id) DO NOTHING",
                         (OWNER_ID, OWNER_NAME))
@@ -424,6 +432,7 @@ def get_purchase_logs(conn, limit, with_prices):
     out = []
     for r in q(conn, "SELECT * FROM purchases ORDER BY created_at DESC LIMIT %s", [limit]):
         out.append({"id": str(r["id"]), "date": str(r["entry_date"]), "time": r["entry_time"],
+                    "material_id": str(r["material_id"]),
                     "material": mn.get(r["material_id"], str(r["material_id"])),
                     "quantity_input": r2(r["quantity_input"]), "unit_input": r["unit_input"],
                     "quantity_base": r2(r["quantity_base"]), "unit_base": r["unit_base"],
@@ -440,12 +449,15 @@ def get_production_logs(conn, limit, with_prices):
         return []
     ids = [r["run_id"] for r in runs]
     by_run = {}
-    for c in q(conn, "SELECT run_id, material_id, quantity_base, unit_base FROM consumption WHERE run_id = ANY(%s)", [ids]):
-        by_run.setdefault(c["run_id"], []).append({"material": mn.get(c["material_id"], str(c["material_id"])),
-                                                    "quantity_base": r2(c["quantity_base"]), "unit": c["unit_base"]})
+    for c in q(conn, "SELECT run_id, material_id, quantity_base, unit_base, cost_uzs FROM consumption WHERE run_id = ANY(%s)", [ids]):
+        by_run.setdefault(c["run_id"], []).append({"material_id": str(c["material_id"]),
+                                                    "material": mn.get(c["material_id"], str(c["material_id"])),
+                                                    "quantity_base": r2(c["quantity_base"]), "unit": c["unit_base"],
+                                                    "cost": (r2(c["cost_uzs"]) if with_prices else None)})
     out = []
     for r in runs:
-        out.append({"id": str(r["run_id"]), "run_id": str(r["run_id"]), "date": str(r["entry_date"]), "time": r["entry_time"],
+        out.append({"id": str(r["run_id"]), "run_id": str(r["run_id"]), "sku_id": str(r["sku_id"]),
+                    "date": str(r["entry_date"]), "time": r["entry_time"],
                     "sku": sn.get(r["sku_id"], str(r["sku_id"])),
                     "packs_produced": r2(r["packs_produced"]), "boxes_produced": r2(r["boxes_produced"]),
                     "total_material_cost_uzs": (r2(r["total_material_cost_uzs"]) if with_prices else None),
@@ -598,8 +610,9 @@ def act_log_production(tid, b):
             qb = num(ln.get("quantity_input")) * unit_factor(opts_or_default(m["unit_options"], m["unit"]), m["unit"], ln.get("unit_input") or m["unit"])
             if qb <= 0:
                 return err("Укажите количество для «%s» больше нуля." % m["name"])
-            total += qb * wac.get(m["material_id"], 0)
-            consumed.append((m["material_id"], qb, m["unit"]))
+            lc = qb * wac.get(m["material_id"], 0)
+            total += lc
+            consumed.append((m["material_id"], qb, m["unit"], lc))
 
         cpp = (total / packs) if packs > 0 else 0
         cpb = (total / boxes) if boxes > 0 else 0
@@ -607,9 +620,9 @@ def act_log_production(tid, b):
         run = q1(conn, """INSERT INTO production_runs(entry_date,entry_time,sku_id,packs_produced,boxes_produced,total_material_cost_uzs,cost_per_pack_uzs,cost_per_box_uzs,logged_by)
                           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING run_id""",
                   [d, t, sku["sku_id"], packs, r2(boxes), r2(total), r2(cpp), r2(cpb), int(tid)])
-        for mid, qb, unit in consumed:
-            q1(conn, """INSERT INTO consumption(run_id,entry_date,material_id,quantity_base,unit_base,for_sku_id,logged_by)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING id""", [run["run_id"], d, mid, qb, unit, sku["sku_id"], int(tid)])
+        for mid, qb, unit, lc in consumed:
+            q1(conn, """INSERT INTO consumption(run_id,entry_date,material_id,quantity_base,unit_base,for_sku_id,logged_by,cost_uzs)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""", [run["run_id"], d, mid, qb, unit, sku["sku_id"], int(tid), r2(lc)])
         return ok({"logged": True, "run_id": str(run["run_id"]), "packs_produced": r2(packs),
                    "total_material_cost_uzs": r2(total), "cost_per_pack_uzs": r2(cpp), "cost_per_box_uzs": r2(cpb)},
                   compute_alerts(conn))
@@ -745,6 +758,100 @@ def act_manage_skus(tid, b):
         return err("Неизвестная операция.")
 
 
+# ── Owner-only: edit / delete log entries ───────────────────────────────────
+def act_delete_entry(tid, b):
+    with db() as conn:
+        require_role(conn, tid, 3)
+        kind, eid = b.get("kind"), b.get("id")
+        if not eid:
+            return err("Не указана запись.")
+        if kind == "purchase":
+            row = q1(conn, "DELETE FROM purchases WHERE id=%s RETURNING id", [int(eid)])
+        elif kind == "production":
+            row = q1(conn, "DELETE FROM production_runs WHERE run_id=%s RETURNING run_id", [int(eid)])  # cascades consumption
+        elif kind == "transfer":
+            row = q1(conn, "DELETE FROM transfers_out WHERE id=%s RETURNING id", [int(eid)])
+        else:
+            return err("Неизвестный тип записи.")
+        return ok({"deleted": True}, compute_alerts(conn)) if row else err("Запись не найдена.")
+
+
+def act_edit_purchase(tid, b):
+    with db() as conn:
+        require_role(conn, tid, 3)
+        p = q1(conn, "SELECT * FROM purchases WHERE id=%s", [int(b.get("id") or 0)]) if b.get("id") else None
+        if not p:
+            return err("Закупка не найдена.")
+        m = q1(conn, "SELECT * FROM raw_materials WHERE material_id=%s", [p["material_id"]])
+        qty = num(b.get("quantity_input"))
+        if qty <= 0:
+            return err("Укажите количество больше нуля.")
+        unit_in = str(b.get("unit_input") or p["unit_input"] or m["unit"])
+        qb = qty * unit_factor(opts_or_default(m["unit_options"], m["unit"]), m["unit"], unit_in)
+        per = (num(p["total_sum_uzs"]) / qb) if (p["total_sum_uzs"] is not None and qb > 0) else p["price_per_base_unit"]
+        sup = str(b["supplier"]) if b.get("supplier") is not None else p["supplier"]
+        ex(conn, "UPDATE purchases SET quantity_input=%s, unit_input=%s, quantity_base=%s, supplier=%s, price_per_base_unit=%s WHERE id=%s",
+           [qty, unit_in, qb, sup, per, int(b["id"])])
+        return ok({"updated": True}, compute_alerts(conn))
+
+
+def act_edit_transfer(tid, b):
+    with db() as conn:
+        require_role(conn, tid, 3)
+        t = q1(conn, "SELECT * FROM transfers_out WHERE id=%s", [int(b.get("id") or 0)]) if b.get("id") else None
+        if not t:
+            return err("Передача не найдена.")
+        packs = num(b.get("packs_transferred"))
+        if packs <= 0:
+            return err("Укажите количество пачек больше нуля.")
+        produced, transferred = finished_map(conn)
+        avail = produced.get(t["sku_id"], 0) - (transferred.get(t["sku_id"], 0) - num(t["packs_transferred"]))
+        if packs > avail:
+            return err("Недостаточно на складе. Доступно пачек: " + fmt_num(avail))
+        ex(conn, "UPDATE transfers_out SET packs_transferred=%s, notes=%s WHERE id=%s",
+           [packs, str(b.get("notes") or ""), int(b["id"])])
+        return ok({"updated": True})
+
+
+def act_edit_production(tid, b):
+    with db() as conn:
+        require_role(conn, tid, 3)
+        run = q1(conn, "SELECT * FROM production_runs WHERE run_id=%s", [int(b.get("id") or 0)]) if b.get("id") else None
+        if not run:
+            return err("Прогон не найден.")
+        sku = q1(conn, "SELECT * FROM finished_products WHERE sku_id=%s", [run["sku_id"]])
+        packs = num(b.get("packs_produced"))
+        if packs <= 0:
+            return err("Укажите количество пачек больше нуля.")
+        lines = b.get("materials") or []
+        if not lines:
+            return err("Добавьте хотя бы один материал расхода.")
+        ppb = num(sku["packs_per_box"]) or 1
+        boxes = packs / ppb
+        wac = wac_map(conn)
+        consumed, total = [], 0.0
+        for i, ln in enumerate(lines):
+            m = q1(conn, "SELECT * FROM raw_materials WHERE material_id=%s", [int(ln.get("material_id") or 0)]) if ln.get("material_id") else None
+            if not m:
+                return err("Материал не найден в строке %d." % (i + 1))
+            qb = num(ln.get("quantity_input")) * unit_factor(opts_or_default(m["unit_options"], m["unit"]), m["unit"], ln.get("unit_input") or m["unit"])
+            if qb <= 0:
+                return err("Укажите количество для «%s» больше нуля." % m["name"])
+            lc = qb * wac.get(m["material_id"], 0)
+            total += lc
+            consumed.append((m["material_id"], qb, m["unit"], lc))
+        cpp = (total / packs) if packs > 0 else 0
+        cpb = (total / boxes) if boxes > 0 else 0
+        ex(conn, "UPDATE production_runs SET packs_produced=%s,boxes_produced=%s,total_material_cost_uzs=%s,cost_per_pack_uzs=%s,cost_per_box_uzs=%s WHERE run_id=%s",
+           [packs, r2(boxes), r2(total), r2(cpp), r2(cpb), run["run_id"]])
+        ex(conn, "DELETE FROM consumption WHERE run_id=%s", [run["run_id"]])
+        d = str(run["entry_date"])
+        for mid, qb, unit, lc in consumed:
+            ex(conn, """INSERT INTO consumption(run_id,entry_date,material_id,quantity_base,unit_base,for_sku_id,logged_by,cost_uzs)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""", [run["run_id"], d, mid, qb, unit, run["sku_id"], int(tid), r2(lc)])
+        return ok({"updated": True, "cost_per_pack_uzs": r2(cpp)}, compute_alerts(conn))
+
+
 ACTIONS = {
     "get_user": lambda tid, b: act_get_user(tid),
     "bootstrap": lambda tid, b: act_bootstrap(tid),
@@ -755,6 +862,10 @@ ACTIONS = {
     "manage_users": act_manage_users,
     "manage_materials": act_manage_materials,
     "manage_skus": act_manage_skus,
+    "delete_entry": act_delete_entry,
+    "edit_purchase": act_edit_purchase,
+    "edit_production": act_edit_production,
+    "edit_transfer": act_edit_transfer,
 }
 
 

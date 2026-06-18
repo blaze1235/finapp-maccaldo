@@ -75,7 +75,8 @@
   .qa-btn:active{transform:scale(.97);}
   .qa-prod{background:var(--gr);} .qa-buy{background:var(--ink);}
   .qa-i{font-size:26px;}
-  .pend-card{cursor:pointer;}
+  .pend-card,.costcard,.histcard{cursor:pointer;}
+  .editable::after{content:"✎";float:right;color:var(--ink3);font-size:13px;margin-left:6px;}
 
   .kpi{display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr;background:var(--sur);border-radius:18px;margin-bottom:8px;overflow:hidden;}
   .kpi .div{background:var(--bdr);}
@@ -407,9 +408,10 @@ function renderHome(m){
 
 /* ── HISTORY ── */
 function renderHistory(m){
-  var D=S.D, withP=canSeePrices();
+  var D=S.D, withP=canSeePrices(), canEdit=rank()>=3; // owner only
   S.histFilter = S.histFilter || "all";
   var P=(D.logs&&D.logs.purchases)||[], R=(D.logs&&D.logs.production)||[], T=(D.logs&&D.logs.transfers)||[];
+  var KIND={pur:"purchase",prod:"production",tr:"transfer"};
 
   var items=[];
   P.forEach(function(l){ items.push({k:"pur", sort:l.date+" "+l.time, l:l}); });
@@ -418,26 +420,28 @@ function renderHistory(m){
   items.sort(function(a,b){ return a.sort<b.sort?1:(a.sort>b.sort?-1:0); });
 
   var f=S.histFilter;
-  var filtered=items.filter(function(it){ return f==="all"||(f==="pur"&&it.k==="pur")||(f==="prod"&&it.k==="prod")||(f==="tr"&&it.k==="tr"); });
+  var filtered=items.filter(function(it){ return f==="all"||f===it.k; });
 
   var chips=[["all","Все"],["prod","Производство"],["pur","Закупки"],["tr","Передачи"]];
   var h='<div class="seg">'+chips.map(function(c){ return '<b class="'+(f===c[0]?"on":"")+'" data-hf="'+c[0]+'">'+c[1]+'</b>'; }).join("")+'</div>';
+  if(canEdit) h+='<div class="sub" style="margin:0 4px 10px;">Нажмите на запись, чтобы изменить или удалить.</div>';
 
   if(!filtered.length){ h+='<div class="card">'+empty("🕘","Нет операций в этой категории")+'</div>'; }
   filtered.forEach(function(it){
     var l=it.l;
+    var attr = canEdit ? ' histcard" data-ek="'+KIND[it.k]+'" data-eid="'+esc(l.id)+'"' : '"';
     if(it.k==="pur"){
       var amt = l.price_confirmed ? '<span class="chip chip-g">'+(withP&&l.total_sum_uzs!=null?money(l.total_sum_uzs):"оплачено")+'</span>' : '<span class="chip chip-a">без цены</span>';
-      h+='<div class="card"><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--blBg)">📥</div>'+
+      h+='<div class="card'+attr+'><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--blBg)">📥</div>'+
          '<div><div class="nm">'+esc(l.material)+'</div><div class="sub">'+esc(l.date)+' '+esc(l.time)+' · '+fmt(l.quantity_input)+' '+esc(l.unit_input)+(l.supplier?' · '+esc(l.supplier):'')+'</div></div></div>'+amt+'</div></div>';
     } else if(it.k==="prod"){
       var mats=(l.materials||[]).map(function(mm){ return esc(mm.material)+" "+fmt(mm.quantity_base)+" "+esc(mm.unit); }).join(" · ");
-      h+='<div class="card"><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--grBg)">🏭</div>'+
+      h+='<div class="card'+attr+'><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--grBg)">🏭</div>'+
          '<div><div class="nm">'+esc(l.sku)+'</div><div class="sub">'+esc(l.date)+' '+esc(l.time)+' · '+fmt(l.packs_produced)+' пачек</div></div></div>'+
          (withP&&l.cost_per_pack_uzs!=null?'<span class="chip chip-b">'+fmt(l.cost_per_pack_uzs)+' /пачка</span>':'')+'</div>'+
          (mats?'<div class="sub" style="margin-top:8px;">↳ '+mats+'</div>':'')+'</div>';
     } else {
-      h+='<div class="card"><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--puBg)">🚚</div>'+
+      h+='<div class="card'+attr+'><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--puBg)">🚚</div>'+
          '<div><div class="nm">'+esc(l.sku)+'</div><div class="sub">'+esc(l.date)+' '+esc(l.time)+' · на главный завод'+(l.notes?' · '+esc(l.notes):'')+'</div></div></div>'+
          '<span class="chip chip-p">−'+fmt(l.packs_transferred)+' пачек</span></div></div>';
     }
@@ -445,6 +449,82 @@ function renderHistory(m){
 
   m.innerHTML=h;
   m.querySelectorAll("[data-hf]").forEach(function(b){ b.addEventListener("click",function(){ S.histFilter=b.dataset.hf; renderHistory(m); }); });
+  m.querySelectorAll("[data-ek]").forEach(function(c){ c.addEventListener("click",function(){ openLogActions(c.dataset.ek, c.dataset.eid); }); });
+}
+
+/* ── Owner: edit / delete a log entry ── */
+function openLogActions(kind, id){
+  openSheet("Запись",
+    '<button class="btn btn-gray" id="logEdit">Изменить</button>'+
+    '<button class="btn btn-red-out" id="logDel" style="margin-top:10px;">Удалить</button>'+
+    '<button class="ghost" id="logCancel" style="display:block;margin:14px auto 0;">Отмена</button>',
+    function(){
+      $("#logEdit").addEventListener("click",function(){ openLogEdit(kind,id); });
+      $("#logDel").addEventListener("click",function(){
+        openSheet("Удалить запись?",
+          '<div class="sub" style="margin-bottom:14px;">Запись будет удалена безвозвратно, остатки и склад пересчитаются.</div>'+
+          '<button class="btn btn-red-out" id="delYes">Да, удалить</button>'+
+          '<button class="ghost" id="delNo" style="display:block;margin:14px auto 0;">Отмена</button>',
+          function(){
+            $("#delYes").addEventListener("click",async function(){ var r=await api("delete_entry",{kind:kind,id:id}); if(r.success){toast("Удалено","ok");closeSheet();await boot(false);}else toast(r.error,"error"); });
+            $("#delNo").addEventListener("click",closeSheet);
+          });
+      });
+      $("#logCancel").addEventListener("click",closeSheet);
+    });
+}
+function openLogEdit(kind,id){
+  var L=S.D.logs||{};
+  if(kind==="purchase"){ var lp=(L.purchases||[]).find(function(x){return x.id===id;}); if(lp) editPurchaseSheet(lp); }
+  else if(kind==="production"){ var lr=(L.production||[]).find(function(x){return x.id===id;}); if(lr) editProductionSheet(lr); }
+  else if(kind==="transfer"){ var lt=(L.transfers||[]).find(function(x){return x.id===id;}); if(lt) editTransferSheet(lt); }
+}
+function editPurchaseSheet(l){
+  openSheet("Изменить закупку",
+    '<div class="fg"><div class="nm">'+esc(l.material)+'</div>'+
+    '<div class="inl"><div><label class="flabel">Количество</label><input class="fin big mono" id="epu_qty" type="number" value="'+l.quantity_input+'"/></div>'+
+    '<div style="flex:0 0 130px;"><label class="flabel">Ед.</label><select class="fin" id="epu_unit">'+unitOpts(l.material_id,l.unit_input)+'</select></div></div>'+
+    '<div><label class="flabel">Поставщик</label><input class="fin" id="epu_sup" value="'+esc(l.supplier||"")+'"/></div>'+
+    '<button class="btn btn-ink" id="epu_save">Сохранить</button></div>',
+    function(){ $("#epu_save").addEventListener("click",async function(){
+      var qty=parseFloat($("#epu_qty").value); if(!(qty>0)){toast("Укажите количество","error");return;}
+      var r=await api("edit_purchase",{id:l.id,quantity_input:qty,unit_input:$("#epu_unit").value,supplier:$("#epu_sup").value});
+      if(r.success){toast("Изменено","ok");closeSheet();await boot(false);}else toast(r.error,"error");
+    }); });
+}
+function editTransferSheet(l){
+  openSheet("Изменить передачу",
+    '<div class="fg"><div class="nm">'+esc(l.sku)+'</div>'+
+    '<div><label class="flabel">Пачек</label><input class="fin big mono" id="ept_packs" type="number" value="'+l.packs_transferred+'"/></div>'+
+    '<div><label class="flabel">Заметка</label><input class="fin" id="ept_note" value="'+esc(l.notes||"")+'"/></div>'+
+    '<button class="btn btn-ink" id="ept_save">Сохранить</button></div>',
+    function(){ $("#ept_save").addEventListener("click",async function(){
+      var packs=parseFloat($("#ept_packs").value); if(!(packs>0)){toast("Укажите пачки","error");return;}
+      var r=await api("edit_transfer",{id:l.id,packs_transferred:packs,notes:$("#ept_note").value});
+      if(r.success){toast("Изменено","ok");closeSheet();await boot(false);}else toast(r.error,"error");
+    }); });
+}
+function editProductionSheet(l){
+  S.prodLines=(l.materials||[]).map(function(mm){ return {material_id:mm.material_id, qty:String(mm.quantity_base), unit:mm.unit}; });
+  if(!S.prodLines.length) S.prodLines=[{material_id:"",qty:"",unit:""}];
+  openSheet("Изменить производство",
+    '<div class="fg"><div class="nm">'+esc(l.sku)+'</div>'+
+    '<div><label class="flabel">Произведено пачек</label><input class="fin big mono" id="ep_packs" type="number" value="'+l.packs_produced+'"/></div>'+
+    '<div><label class="flabel">Израсходованное сырьё</label><div id="plines"></div><button class="ghost" id="ep_add" style="margin-top:4px;">+ материал</button></div>'+
+    '<button class="btn btn-ink" id="ep_save">Сохранить</button></div>',
+    function(){
+      renderProdLines();
+      $("#ep_add").addEventListener("click",function(){ readProdLines(); S.prodLines.push({material_id:"",qty:"",unit:""}); renderProdLines(); });
+      $("#ep_save").addEventListener("click",async function(){
+        readProdLines();
+        var packs=parseFloat($("#ep_packs").value);
+        var lines=S.prodLines.filter(function(x){return x.material_id&&parseFloat(x.qty)>0;}).map(function(x){return {material_id:x.material_id,quantity_input:parseFloat(x.qty),unit_input:x.unit};});
+        if(!(packs>0)){toast("Укажите количество пачек","error");return;}
+        if(!lines.length){toast("Добавьте материал","error");return;}
+        var r=await api("edit_production",{id:l.id,packs_produced:packs,materials:lines});
+        if(r.success){toast("Изменено · с/с "+money(r.data.cost_per_pack_uzs)+"/пачка","ok");closeSheet();await boot(false);}else toast(r.error,"error");
+      });
+    });
 }
 
 /* ── STOCK ── */
@@ -472,26 +552,54 @@ function renderStock(m){
     });
   } else h+='<div class="card">'+empty("🏷️","Нет продукции — добавьте SKU в Настройках")+'</div>';
 
-  // Себестоимость per product (owner/manager only) — latest run per SKU with breakdown.
+  // Себестоимость — карточка на каждый продукт, тап → подробная страница (owner/manager).
   if(withP){
-    var prodLogs=(D.logs&&D.logs.production)||[];
-    var seen={}, costItems=[];
-    prodLogs.forEach(function(l){ if(!seen[l.sku]){ seen[l.sku]=true; costItems.push(l); } });
     h+='<div class="ph">Себестоимость продукции</div>';
-    if(costItems.length){
-      costItems.forEach(function(l){
-        var mats=(l.materials||[]).map(function(mm){ return esc(mm.material)+" "+fmt(mm.quantity_base)+" "+esc(mm.unit); }).join(" · ");
-        h+='<div class="card"><div class="row"><div><div class="nm">'+esc(l.sku)+'</div><div class="sub">прогон '+esc(l.date)+' · '+fmt(l.packs_produced)+' пачек</div></div>'+
-          '<div style="text-align:right;"><span class="chip chip-b">'+fmt(l.cost_per_pack_uzs)+' /пачка</span>'+
-          '<div class="sub mono" style="margin-top:5px;">'+fmt(l.cost_per_box_uzs)+' /коробка</div></div></div>'+
-          (mats?'<div class="sub" style="margin-top:8px;">↳ '+mats+'</div>':'')+'</div>';
+    if(fin.length){
+      fin.forEach(function(s){
+        var has=s.cost_per_pack>0;
+        h+='<div class="card costcard" data-sku="'+esc(s.sku_id)+'"><div class="row"><div><div class="nm">'+esc(s.name)+'</div>'+
+          '<div class="sub">'+(s.weight_g?fmt(s.weight_g)+' г · ':'')+fmt(s.packs_per_box)+' пачек/кор</div></div>'+
+          '<div style="text-align:right;"><div class="num mono" style="font-size:20px;">'+(has?fmt(s.cost_per_pack):'—')+'</div><div class="sub">сум / пачка</div></div></div>'+
+          '<div class="row rowline"><span class="sub">'+(has?(fmt(s.cost_per_box)+' сум / коробка'):'нет данных о производстве')+'</span><span class="chip chip-b">подробнее →</span></div></div>';
       });
-    } else h+='<div class="card">'+empty("🧮","Себестоимость появится после первого производства")+'</div>';
+    } else h+='<div class="card">'+empty("🧮","Нет продукции — добавьте SKU в Настройках")+'</div>';
   }
 
   if(rank()>=2 && fin.length) h+='<button class="btn btn-gray" style="margin-top:10px;" id="trBtn">🚚 Передать на главный завод</button>';
   m.innerHTML=h;
   var tb=$("#trBtn"); if(tb) tb.addEventListener("click",openTransfer);
+  m.querySelectorAll(".costcard").forEach(function(c){ c.addEventListener("click",function(){ openCostDetail(c.dataset.sku); }); });
+}
+
+/* ── Себестоимость: детальная страница продукта ── */
+function openCostDetail(skuId){
+  var fin=(S.D.stock.finished_goods||[]).find(function(x){return x.sku_id===skuId;});
+  var sku=(S.D.skus||[]).find(function(x){return x.sku_id===skuId;});
+  var runs=((S.D.logs&&S.D.logs.production)||[]).filter(function(r){return r.sku_id===skuId;});
+  var name=fin?fin.name:(sku?sku.name:"Продукт");
+  var latest=runs[0];
+  var h='<div class="fg">';
+  h+='<div class="card"><div class="row rowline" style="border:0;padding:0;"><span class="sub">На складе</span><span class="num mono">'+fmt(fin?fin.packs_in_stock:0)+' пачек · '+fmt(fin?fin.boxes_in_stock:0)+' кор.</span></div>'+
+     '<div class="row rowline"><span class="sub">Себестоимость 1 пачки</span><span class="num mono" style="font-size:18px;">'+fmt(fin?fin.cost_per_pack:0)+' сум</span></div>'+
+     '<div class="row rowline"><span class="sub">Себестоимость 1 коробки</span><span class="num mono">'+fmt(fin?fin.cost_per_box:0)+' сум</span></div></div>';
+  if(latest){
+    h+='<div class="ph">Рецепт · последний прогон ('+esc(latest.date)+')</div><div class="card">';
+    (latest.materials||[]).forEach(function(mm,i){
+      h+='<div class="row'+(i?' rowline':'')+'"><div><div class="nm">'+esc(mm.material)+'</div><div class="sub">'+fmt(mm.quantity_base)+' '+esc(mm.unit)+'</div></div>'+
+        '<span class="mono">'+(mm.cost!=null?fmt(mm.cost)+' сум':'')+'</span></div>';
+    });
+    h+='<div class="row rowline"><span class="nm">Итого на '+fmt(latest.packs_produced)+' пачек</span><span class="num mono">'+fmt(latest.total_material_cost_uzs)+' сум</span></div></div>';
+    h+='<div class="ph">Все прогоны ('+runs.length+')</div>';
+    runs.forEach(function(r){
+      h+='<div class="card"><div class="row"><div><div class="nm">'+fmt(r.packs_produced)+' пачек</div><div class="sub">'+esc(r.date)+' '+esc(r.time)+'</div></div>'+
+        '<span class="chip chip-b">'+fmt(r.cost_per_pack_uzs)+' /пачка</span></div></div>';
+    });
+  } else {
+    h+='<div class="card">'+empty("🧮","Этот продукт ещё не производился")+'</div>';
+  }
+  h+='</div>';
+  openSheet(name, h);
 }
 
 /* ── OPS (Записать) ── */
