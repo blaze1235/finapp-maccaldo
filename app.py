@@ -261,14 +261,19 @@ CREATE TABLE IF NOT EXISTS transfers_out (
   packs_transferred NUMERIC NOT NULL DEFAULT 0, logged_by BIGINT, notes TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_mat_fac ON raw_materials(factory);
-CREATE INDEX IF NOT EXISTS idx_sku_fac ON finished_products(factory);
-CREATE INDEX IF NOT EXISTS idx_pur_fac ON purchases(factory, material_id);
-CREATE INDEX IF NOT EXISTS idx_run_fac ON production_runs(factory, sku_id);
-CREATE INDEX IF NOT EXISTS idx_con_fac ON consumption(factory, material_id);
-CREATE INDEX IF NOT EXISTS idx_con_run ON consumption(run_id);
-CREATE INDEX IF NOT EXISTS idx_tr_fac  ON transfers_out(factory, sku_id);
 """
+
+# Indexes are created AFTER migrations, because some reference the 'factory'
+# column which an older database only gains during the migration step.
+INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_mat_fac ON raw_materials(factory)",
+    "CREATE INDEX IF NOT EXISTS idx_sku_fac ON finished_products(factory)",
+    "CREATE INDEX IF NOT EXISTS idx_pur_fac ON purchases(factory, material_id)",
+    "CREATE INDEX IF NOT EXISTS idx_run_fac ON production_runs(factory, sku_id)",
+    "CREATE INDEX IF NOT EXISTS idx_con_fac ON consumption(factory, material_id)",
+    "CREATE INDEX IF NOT EXISTS idx_con_run ON consumption(run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tr_fac  ON transfers_out(factory, sku_id)",
+]
 
 # Idempotent migrations for databases created before the two-factory upgrade.
 MIGRATIONS = [
@@ -288,15 +293,27 @@ MIGRATIONS = [
 
 
 def init_db():
-    with db() as conn:
+    # Run with autocommit and statement-by-statement so a single benign/idempotent
+    # statement can't abort the whole init transaction. Order matters:
+    #   1) create tables  2) migrate (add columns to existing tables)  3) indexes  4) seed.
+    conn = POOL.getconn()
+    old_auto = conn.autocommit
+    conn.autocommit = True
+    try:
         with conn.cursor() as cur:
             cur.execute(SCHEMA)
-        for m in MIGRATIONS:
-            with conn.cursor() as cur:
-                cur.execute(m)
+        for stmt in MIGRATIONS + INDEXES:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(stmt)
+            except Exception as e:
+                log.warning("init step skipped (%s): %s", stmt.split("\n")[0][:60], e)
         with conn.cursor() as cur:
             cur.execute("INSERT INTO users(telegram_id,name,role) VALUES(%s,%s,'owner') ON CONFLICT (telegram_id) DO NOTHING",
                         (OWNER_ID, OWNER_NAME))
+    finally:
+        conn.autocommit = old_auto
+        POOL.putconn(conn)
     log.info("DB schema ready")
 
 
