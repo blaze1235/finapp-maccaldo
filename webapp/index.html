@@ -178,14 +178,7 @@
   <div id="appmain" style="display:none;flex-direction:column;flex:1;">
     <header>
       <div class="h-title" id="htitle">Главная</div>
-      <div class="h-right">
-        <span class="rolechip" id="rolechip">—</span>
-        <select class="roleswitch" id="roleswitch" style="display:none;">
-          <option value="owner">Владелец</option>
-          <option value="manager">Менеджер</option>
-          <option value="workshop">Цех приправ</option>
-        </select>
-      </div>
+      <div class="h-right" id="hdr-right"></div>
     </header>
     <main id="main"></main>
     <nav id="nav"></nav>
@@ -199,12 +192,14 @@
 "use strict";
 var API_URL = window.API_OVERRIDE || "/api";
 var EXPECTED_VERSION = "4";
-var RANK = { workshop:1, manager:2, owner:3 };
-var ROLE_RU = { owner:"Владелец", manager:"Менеджер", workshop:"Цех приправ" };
-var CAT_RU = { seasoning:"Приправа", oil:"Масло", packaging:"Упаковка" };
+var RANK = { seasoning:1, main:1, manager:2, owner:3 };
+var ROLE_RU = { owner:"Владелец", manager:"Менеджер", seasoning:"Цех приправ", main:"Главный завод" };
+var FACTORY_RU = { seasoning:"Цех приправ", main:"Главный завод" };
+var CAT_RU = { seasoning:"Приправа", oil:"Масло", packaging:"Упаковка", flour:"Мука/зерно", other:"Прочее" };
 
 var S = {
   telegramId:null, accessCode:"", user:null, effRole:null,
+  factory:"seasoning", factories:["seasoning"], reportPeriod:"month",
   D:null,                 // bootstrap payload
   tab:"home", opMode:"purchase",
   prodLines:[{material_id:"",qty:"",unit:""}]
@@ -227,7 +222,7 @@ function toast(msg,type){
 }
 
 async function api(action, extra){
-  var payload = Object.assign({ action:action, telegram_id:S.telegramId, access_code:S.accessCode }, extra||{});
+  var payload = Object.assign({ action:action, telegram_id:S.telegramId, access_code:S.accessCode, factory:S.factory }, extra||{});
   try{
     var res = await fetch(API_URL,{ method:"POST", headers:{ "Content-Type":"text/plain;charset=utf-8" }, body:JSON.stringify(payload) });
     return await res.json();
@@ -270,19 +265,10 @@ async function doLogin(silent){
     return;
   }
   S.user=r.data; S.effRole=r.data.role;
+  S.factories=r.data.factories||["seasoning"]; S.factory=S.factories[0];
   if(!S.isTelegram){ try{ localStorage.setItem("finapp_login", JSON.stringify({id:S.telegramId, code:S.accessCode})); }catch(e){} }
   $("#login").style.display="none";
   $("#appmain").style.display="flex";
-  $("#rolechip").textContent = ROLE_RU[S.user.role]||S.user.role;
-  if(S.user.role==="owner"){
-    var sw=$("#roleswitch"); sw.style.display="block"; sw.value="owner";
-    sw.addEventListener("change",function(){
-      S.effRole=sw.value;
-      if(rank()<2 && S.tab==="settings") S.tab="home";
-      renderNav(); render();
-      toast("Режим: "+(ROLE_RU[S.effRole]||S.effRole),"ok");
-    });
-  }
   await boot();
 }
 
@@ -292,14 +278,40 @@ async function boot(showSpinner){
   var r = await api("bootstrap");
   if(!r.success){ $("#main").innerHTML='<div class="card"><div class="muted">⚠️ '+esc(r.error)+'</div></div>'; return; }
   S.D = r.data; S.D.alerts = r.alerts||[];
+  S.factory = S.D.factory || S.factory;
+  S.factories = S.D.factories || S.factories;
   S.stale = (String(S.D.version||"") !== EXPECTED_VERSION);
-  renderNav(); render();
+  renderHeader(); renderNav(); render();
+}
+
+/* ── Header: factory switcher + role chip/switcher ── */
+function renderHeader(){
+  var html="";
+  if((S.factories||[]).length>1){
+    html+='<select class="roleswitch" id="facsw" style="background:var(--ink);color:#fff;">'+
+      S.factories.map(function(f){ return '<option value="'+f+'"'+(f===S.factory?" selected":"")+'>'+esc(FACTORY_RU[f]||f)+'</option>'; }).join("")+'</select>';
+  } else {
+    html+='<span class="rolechip">'+esc(FACTORY_RU[S.factory]||S.factory)+'</span>';
+  }
+  if(S.user.role==="owner"){
+    html+='<select class="roleswitch" id="roleswitch">'+["owner","manager","seasoning","main"].map(function(r){
+      return '<option value="'+r+'"'+(r===S.effRole?" selected":"")+'>'+esc(ROLE_RU[r])+'</option>'; }).join("")+'</select>';
+  } else {
+    html+='<span class="rolechip">'+esc(ROLE_RU[S.user.role]||S.user.role)+'</span>';
+  }
+  $("#hdr-right").innerHTML=html;
+  var fs=$("#facsw"); if(fs) fs.addEventListener("change",async function(){ S.factory=fs.value; await boot(); });
+  var rs=$("#roleswitch"); if(rs) rs.addEventListener("change",function(){
+    S.effRole=rs.value;
+    if(rank()<2 && (S.tab==="settings"||S.tab==="report")) S.tab="home";
+    renderNav(); render(); toast("Режим: "+(ROLE_RU[S.effRole]||S.effRole),"ok");
+  });
 }
 
 /* ── Nav ── */
 function navItems(){
   var items=[{id:"home",i:"⊞",l:"Главная"},{id:"stock",i:"📦",l:"Склад"},{id:"ops",i:"＋",l:"Записать"},{id:"hist",i:"🕘",l:"История"}];
-  if(rank()>=2) items.push({id:"settings",i:"⚙",l:"Настройки"});
+  if(rank()>=2){ items.push({id:"report",i:"📈",l:"Отчёты"}); items.push({id:"settings",i:"⚙",l:"Настройки"}); }
   return items;
 }
 function renderNav(){
@@ -313,14 +325,14 @@ function renderNav(){
 }
 
 function render(){
-  if(rank()<2 && (S.tab==="settings")) S.tab="home";
-  $("#htitle").textContent = {home:"Главная",stock:"Склад",ops:"Записать",hist:"История",settings:"Настройки"}[S.tab];
-  $("#rolechip").textContent = (ROLE_RU[S.effRole]||S.effRole)+(S.effRole!==S.user.role?" · обзор":"");
+  if(rank()<2 && (S.tab==="settings"||S.tab==="report")) S.tab="home";
+  $("#htitle").textContent = ({home:"Главная",stock:"Склад",ops:"Записать",hist:"История",report:"Отчёты",settings:"Настройки"}[S.tab])||"";
   var m=$("#main"); m.className="anim";
   if(S.tab==="home") renderHome(m);
   else if(S.tab==="stock") renderStock(m);
   else if(S.tab==="ops") renderOps(m);
   else if(S.tab==="hist") renderHistory(m);
+  else if(S.tab==="report") renderReports(m);
   else if(S.tab==="settings") renderSettings(m);
 }
 
@@ -566,7 +578,7 @@ function renderStock(m){
     } else h+='<div class="card">'+empty("🧮","Нет продукции — добавьте SKU в Настройках")+'</div>';
   }
 
-  if(rank()>=2 && fin.length) h+='<button class="btn btn-gray" style="margin-top:10px;" id="trBtn">🚚 Передать на главный завод</button>';
+  if(S.D.can_transfer && fin.length) h+='<button class="btn btn-gray" style="margin-top:10px;" id="trBtn">🚚 Передать на главный завод</button>';
   m.innerHTML=h;
   var tb=$("#trBtn"); if(tb) tb.addEventListener("click",openTransfer);
   m.querySelectorAll(".costcard").forEach(function(c){ c.addEventListener("click",function(){ openCostDetail(c.dataset.sku); }); });
@@ -612,10 +624,13 @@ function renderOps(m){
   else renderProduction($("#opbody"));
 }
 
-function matOptions(sel){
-  var ms=S.D.materials||[];
+function matOptions(sel, mode){
+  var ms=(S.D.materials||[]).filter(function(x){
+    if(mode==="purchase") return !x.is_compound && !x.source_sku_id; // нельзя закупать компаунды и переданное сырьё
+    return true;
+  });
   if(!ms.length) return '<option value="">— нет материалов —</option>';
-  return '<option value="">Материал…</option>'+ms.map(function(x){ return '<option value="'+x.material_id+'"'+(x.material_id===sel?" selected":"")+'>'+esc(x.name)+'</option>'; }).join("");
+  return '<option value="">Материал…</option>'+ms.map(function(x){ return '<option value="'+x.material_id+'"'+(x.material_id===sel?" selected":"")+'>'+esc(x.name)+(x.is_compound?" 🧩":"")+'</option>'; }).join("");
 }
 function skuOptions(sel,ph){
   var ks=S.D.skus||[];
@@ -649,7 +664,7 @@ function renderPurchase(b){
 
   // New purchase form.
   h+='<div class="ph">Новая закупка</div><div class="card"><div class="fg">'+
-    '<div><label class="flabel">Материал</label><select class="fin" id="pmat">'+matOptions()+'</select></div>'+
+    '<div><label class="flabel">Материал</label><select class="fin" id="pmat">'+matOptions("","purchase")+'</select></div>'+
     '<div class="inl"><div><label class="flabel">Количество</label><input class="fin big mono" id="pqty" type="number" inputmode="decimal" placeholder="0" /></div>'+
     '<div style="flex:0 0 130px;"><label class="flabel">Ед.</label><select class="fin" id="punit"></select></div></div>'+
     '<div><label class="flabel">Поставщик</label><input class="fin" id="psup" placeholder="необязательно" /></div>'+
@@ -718,12 +733,15 @@ function readProdLines(){
 function renderProdLines(){
   var box=$("#plines");
   box.innerHTML=S.prodLines.map(function(l,i){
+    var mat=(S.D.materials||[]).find(function(x){return x.material_id===l.material_id;});
+    var isC=mat&&mat.is_compound;
+    var hint=isC?'<div class="sub" style="margin:-3px 0 8px 2px;">🧩 '+((mat.recipe||[]).map(function(c){return esc(c.name)+" "+fmt(c.quantity)+" "+esc(c.unit);}).join(" · "))+' × кол-во партий</div>':'';
     return '<div class="pline">'+
       '<select class="pl-mat" style="flex:1.4;background:var(--bg);border:none;outline:none;" data-i="'+i+'">'+matOptions(l.material_id)+'</select>'+
-      '<input class="pl-qty mono" style="flex:.8;background:var(--bg);border:none;outline:none;" type="number" inputmode="decimal" placeholder="кол-во" value="'+(l.qty||"")+'" />'+
+      '<input class="pl-qty mono" style="flex:.8;background:var(--bg);border:none;outline:none;" type="number" inputmode="decimal" placeholder="'+(isC?"партий":"кол-во")+'" value="'+(l.qty||"")+'" />'+
       '<select class="pl-unit" style="flex:.8;background:var(--bg);border:none;outline:none;">'+unitOpts(l.material_id,l.unit)+'</select>'+
       (S.prodLines.length>1?'<button class="x" data-x="'+i+'">×</button>':'')+
-      '</div>';
+      '</div>'+hint;
   }).join("");
   box.querySelectorAll(".pl-mat").forEach(function(sel){
     sel.addEventListener("change",function(){ readProdLines(); renderProdLines(); });
@@ -787,6 +805,38 @@ function openTransfer(){
     });
 }
 
+/* ── REPORTS (manager/owner) ── */
+function renderReports(m){
+  m.innerHTML='<div class="loadwrap"><div class="spin"></div>Загрузка…</div>';
+  api("report",{period:S.reportPeriod}).then(function(r){
+    if(!r.success){ m.innerHTML='<div class="card">'+empty("📈",r.error)+'</div>'; return; }
+    var reps=r.data.reports||[];
+    var per=[["today","Сегодня"],["month","Месяц"],["all","Всё"]];
+    var h='<div class="seg">'+per.map(function(p){ return '<b class="'+(S.reportPeriod===p[0]?"on":"")+'" data-rp="'+p[0]+'">'+p[1]+'</b>'; }).join("")+'</div>';
+    reps.forEach(function(rep){
+      h+='<div class="ph">'+esc(FACTORY_RU[rep.factory]||rep.factory)+'</div>';
+      h+='<div class="wallet"><div class="w-lbl">Оценка склада</div><div class="w-val mono">'+money(rep.inventory_raw_value+rep.inventory_finished_value)+'</div>'+
+         '<div class="w-row"><span class="w-lbl">Сырьё</span><span class="syne mono">'+fmt(rep.inventory_raw_value)+'</span></div>'+
+         '<div class="w-row"><span class="w-lbl">Продукция</span><span class="syne mono">'+fmt(rep.inventory_finished_value)+'</span></div></div>';
+      h+='<div class="kpi"><div class="kpi-c"><div class="kpi-v mono">'+fmt(rep.production_packs)+'</div><div class="kpi-l">Пачек</div></div>'+
+         '<div class="div"></div><div class="kpi-c"><div class="kpi-v mono">'+fmt(rep.runs)+'</div><div class="kpi-l">Прогонов</div></div>'+
+         '<div class="div"></div><div class="kpi-c"><div class="kpi-v mono">'+fmt(rep.pending)+'</div><div class="kpi-l">Ждут цену</div></div></div>';
+      h+='<div class="card"><div class="row rowline" style="border:0;padding:0;"><span class="sub">Себестоимость произведённого</span><span class="num mono">'+money(rep.production_cost)+'</span></div>'+
+         '<div class="row rowline"><span class="sub">Закупки за период</span><span class="num mono">'+money(rep.purchase_spend)+'</span></div>'+
+         (rep.factory==="seasoning"?'<div class="row rowline"><span class="sub">Передано на главный завод</span><span class="num mono">'+fmt(rep.transfer_packs)+' пачек</span></div>':'')+'</div>';
+      h+='<div class="ph">По продуктам</div>';
+      if(rep.by_product.length){
+        h+='<div class="card">'+rep.by_product.map(function(b,i){
+          return '<div class="row'+(i?' rowline':'')+'"><div><div class="nm">'+esc(b.name)+'</div><div class="sub">'+fmt(b.packs)+' пачек · '+fmt(b.cost_per_pack)+' /пачка</div></div>'+
+            '<span class="num mono">'+money(b.total_cost)+'</span></div>';
+        }).join("")+'</div>';
+      } else h+='<div class="card">'+empty("🏭","Нет производства за период")+'</div>';
+    });
+    m.innerHTML=h;
+    m.querySelectorAll("[data-rp]").forEach(function(b){ b.addEventListener("click",function(){ S.reportPeriod=b.dataset.rp; renderReports(m); }); });
+  });
+}
+
 /* ── SETTINGS ── */
 function renderSettings(m){
   var D=S.D, users=D.users||[], mats=D.materials||[], skus=D.skus||[];
@@ -802,7 +852,9 @@ function renderSettings(m){
   h+='<div class="ph">Материалы (сырьё)</div>';
   if(!mats.length) h+='<div class="card">'+empty("📦","Нет материалов")+'</div>';
   mats.forEach(function(x){
-    h+='<div class="card"><div class="row"><div><div class="nm">'+esc(x.name)+'</div><div class="sub">'+esc(x.unit)+' · '+(CAT_RU[x.category]||x.category)+' · порог '+fmt(x.low_stock_threshold)+'</div></div>'+
+    var sub = x.is_compound ? ('🧩 компаунд · '+(x.recipe||[]).map(function(c){return esc(c.name)+" "+fmt(c.quantity);}).join(", "))
+                            : (esc(x.unit)+' · '+(CAT_RU[x.category]||x.category)+' · порог '+fmt(x.low_stock_threshold));
+    h+='<div class="card"><div class="row"><div style="min-width:0;flex:1;"><div class="nm">'+esc(x.name)+(x.source_sku_id?' <span class="chip chip-p">из цеха приправ</span>':'')+'</div><div class="sub">'+sub+'</div></div>'+
       '<button class="ghost" data-em="'+esc(x.material_id)+'">изм.</button></div></div>';
   });
   h+='<button class="btn btn-gray btn-sm" id="addM" style="width:100%;margin-top:4px;">+ Материал</button>';
@@ -826,14 +878,38 @@ function renderSettings(m){
   m.querySelectorAll("[data-es]").forEach(function(b){ b.addEventListener("click",function(){ editSku((S.D.skus||[]).find(function(x){return x.sku_id===b.dataset.es;})); }); });
 }
 
-function roleSel(id,cur){ return '<select class="fin" id="'+id+'">'+["workshop","manager","owner"].map(function(r){ return '<option value="'+r+'"'+(r===cur?" selected":"")+'>'+ROLE_RU[r]+'</option>'; }).join("")+'</select>'; }
-function catSel(id,cur){ return '<select class="fin" id="'+id+'">'+["seasoning","oil","packaging"].map(function(c){ return '<option value="'+c+'"'+(c===cur?" selected":"")+'>'+CAT_RU[c]+'</option>'; }).join("")+'</select>'; }
+function roleSel(id,cur){ return '<select class="fin" id="'+id+'">'+["seasoning","main","manager","owner"].map(function(r){ return '<option value="'+r+'"'+(r===cur?" selected":"")+'>'+ROLE_RU[r]+'</option>'; }).join("")+'</select>'; }
+function catSel(id,cur){ return '<select class="fin" id="'+id+'">'+["seasoning","oil","packaging","flour","other"].map(function(c){ return '<option value="'+c+'"'+(c===cur?" selected":"")+'>'+CAT_RU[c]+'</option>'; }).join("")+'</select>'; }
+
+/* compound recipe line editor (shared by add/edit material) */
+function recipeMatOptions(sel){
+  var ms=(S.D.materials||[]).filter(function(x){ return !x.is_compound; });
+  return '<option value="">Компонент…</option>'+ms.map(function(x){ return '<option value="'+x.material_id+'"'+(x.material_id===sel?" selected":"")+'>'+esc(x.name)+' ('+esc(x.unit)+')</option>'; }).join("");
+}
+function renderRecipeLines(){
+  var box=$("#rlines"); if(!box) return;
+  box.innerHTML=S.recipeLines.map(function(l,i){
+    return '<div class="pline"><select class="rl-mat" style="flex:1.5;background:var(--bg);border:none;outline:none;">'+recipeMatOptions(l.material_id)+'</select>'+
+      '<input class="rl-qty mono" style="flex:.8;background:var(--bg);border:none;outline:none;" type="number" inputmode="decimal" placeholder="кол-во" value="'+(l.qty||"")+'" />'+
+      (S.recipeLines.length>1?'<button class="x" data-rx="'+i+'">×</button>':'')+'</div>';
+  }).join("");
+  box.querySelectorAll("[data-rx]").forEach(function(b){ b.addEventListener("click",function(){ readRecipeLines(); S.recipeLines.splice(+b.dataset.rx,1); renderRecipeLines(); }); });
+}
+function readRecipeLines(){
+  var rows=document.querySelectorAll("#rlines .pline");
+  S.recipeLines=Array.prototype.map.call(rows,function(r){ return {material_id:r.querySelector(".rl-mat").value, qty:r.querySelector(".rl-qty").value}; });
+  if(!S.recipeLines.length) S.recipeLines=[{material_id:"",qty:""}];
+}
+function collectRecipe(){
+  readRecipeLines();
+  return S.recipeLines.filter(function(x){return x.material_id&&parseFloat(x.qty)>0;}).map(function(x){return {material_id:x.material_id,quantity:parseFloat(x.qty)};});
+}
 
 function addUser(){
   openSheet("Новый пользователь",
     '<div class="fg"><div><label class="flabel">Telegram ID</label><input class="fin mono" id="nu_id" type="number" placeholder="напр. /id в боте" /></div>'+
     '<div><label class="flabel">Имя</label><input class="fin" id="nu_name" /></div>'+
-    '<div><label class="flabel">Роль</label>'+roleSel("nu_role","workshop")+'</div>'+
+    '<div><label class="flabel">Роль</label>'+roleSel("nu_role","seasoning")+'</div>'+
     '<button class="btn btn-ink" id="nu_save">Добавить</button></div>',
     function(){ $("#nu_save").addEventListener("click",async function(){
       var r=await api("manage_users",{op:"add",payload:{telegram_id:$("#nu_id").value.trim(),name:$("#nu_name").value.trim(),role:$("#nu_role").value}});
@@ -851,20 +927,59 @@ function editUser(id,role,active){
     });
 }
 function addMaterial(){
+  S.recipeLines=[{material_id:"",qty:""}];
   openSheet("Новый материал",
-    '<div class="fg"><div><label class="flabel">Название</label><input class="fin" id="nm_name" placeholder="напр. Соль" /></div>'+
-    '<div class="inl"><div><label class="flabel">Базовая ед.</label><input class="fin" id="nm_unit" value="кг" /></div><div><label class="flabel">Категория</label>'+catSel("nm_cat","seasoning")+'</div></div>'+
-    '<div><label class="flabel">Единицы ввода</label><input class="fin" id="nm_units" placeholder="кг:1, мешок 25кг:25" /></div>'+
-    '<div><label class="flabel">Порог низкого остатка</label><input class="fin mono" id="nm_thr" type="number" value="0" /></div>'+
+    '<div class="fg"><div><label class="flabel">Название</label><input class="fin" id="nm_name" placeholder="напр. Мука" /></div>'+
+    '<label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;"><input type="checkbox" id="nm_comp" style="width:auto;height:18px;"/> Это компаунд (составное сырьё)</label>'+
+    '<div id="nm_normal" class="fg">'+
+      '<div class="inl"><div><label class="flabel">Базовая ед.</label><input class="fin" id="nm_unit" value="кг" /></div><div><label class="flabel">Категория</label>'+catSel("nm_cat","other")+'</div></div>'+
+      '<div><label class="flabel">Единицы ввода</label><input class="fin" id="nm_units" placeholder="кг:1, мешок 25кг:25" /></div>'+
+      '<div><label class="flabel">Порог низкого остатка</label><input class="fin mono" id="nm_thr" type="number" value="0" /></div>'+
+    '</div>'+
+    '<div id="nm_recipe" style="display:none;"><label class="flabel">Состав (на 1 партию)</label><div id="rlines"></div>'+
+      '<button class="ghost" id="r_add" style="margin-top:4px;">+ компонент</button></div>'+
     '<button class="btn btn-ink" id="nm_save">Добавить</button></div>',
-    function(){ $("#nm_save").addEventListener("click",async function(){
-      if(!$("#nm_name").value.trim()){ toast("Укажите название","error"); return; }
-      var r=await api("manage_materials",{op:"add",payload:{name:$("#nm_name").value.trim(),unit:$("#nm_unit").value.trim()||"ед.",category:$("#nm_cat").value,input_units:$("#nm_units").value.trim(),low_stock_threshold:parseFloat($("#nm_thr").value)||0}});
-      if(r.success){ toast("Добавлено","ok"); closeSheet(); await boot(false);} else toast(r.error,"error");
-    }); });
+    function(){
+      var cb=$("#nm_comp");
+      cb.addEventListener("change",function(){ $("#nm_normal").style.display=cb.checked?"none":"block"; $("#nm_recipe").style.display=cb.checked?"block":"none"; if(cb.checked) renderRecipeLines(); });
+      $("#r_add").addEventListener("click",function(){ readRecipeLines(); S.recipeLines.push({material_id:"",qty:""}); renderRecipeLines(); });
+      $("#nm_save").addEventListener("click",async function(){
+        if(!$("#nm_name").value.trim()){ toast("Укажите название","error"); return; }
+        var payload;
+        if(cb.checked){
+          var rec=collectRecipe();
+          if(!rec.length){ toast("Добавьте компоненты компаунда","error"); return; }
+          payload={name:$("#nm_name").value.trim(), is_compound:true, recipe:rec, category:"other"};
+        } else {
+          payload={name:$("#nm_name").value.trim(), unit:$("#nm_unit").value.trim()||"ед.", category:$("#nm_cat").value, input_units:$("#nm_units").value.trim(), low_stock_threshold:parseFloat($("#nm_thr").value)||0};
+        }
+        var r=await api("manage_materials",{op:"add",payload:payload});
+        if(r.success){ toast("Добавлено","ok"); closeSheet(); await boot(false);} else toast(r.error,"error");
+      });
+    });
 }
 function editMaterial(x){
   if(!x) return;
+  if(x.is_compound){
+    S.recipeLines=(x.recipe||[]).map(function(c){ return {material_id:c.material_id, qty:String(c.quantity)}; });
+    if(!S.recipeLines.length) S.recipeLines=[{material_id:"",qty:""}];
+    openSheet("Компаунд",
+      '<div class="fg"><div><label class="flabel">Название</label><input class="fin" id="em_name" value="'+esc(x.name)+'" /></div>'+
+      '<div><label class="flabel">Состав (на 1 партию)</label><div id="rlines"></div><button class="ghost" id="r_add" style="margin-top:4px;">+ компонент</button></div>'+
+      '<button class="btn btn-ink" id="em_save">Сохранить</button>'+
+      '<button class="btn btn-red-out" id="em_del">'+(x.active?"Скрыть компаунд":"Вернуть компаунд")+'</button></div>',
+      function(){
+        renderRecipeLines();
+        $("#r_add").addEventListener("click",function(){ readRecipeLines(); S.recipeLines.push({material_id:"",qty:""}); renderRecipeLines(); });
+        $("#em_save").addEventListener("click",async function(){
+          var rec=collectRecipe(); if(!rec.length){ toast("Добавьте компоненты","error"); return; }
+          var r=await api("manage_materials",{op:"update",payload:{material_id:x.material_id,name:$("#em_name").value.trim(),recipe:rec}});
+          if(r.success){toast("Сохранено","ok");closeSheet();await boot(false);}else toast(r.error,"error");
+        });
+        $("#em_del").addEventListener("click",async function(){ var r=await api("manage_materials",x.active?{op:"delete",payload:{material_id:x.material_id}}:{op:"update",payload:{material_id:x.material_id,active:true}}); if(r.success){toast("Готово","ok");closeSheet();await boot(false);}else toast(r.error,"error"); });
+      });
+    return;
+  }
   openSheet("Материал",
     '<div class="fg"><div><label class="flabel">Название</label><input class="fin" id="em_name" value="'+esc(x.name)+'" /></div>'+
     '<div class="inl"><div><label class="flabel">Базовая ед.</label><input class="fin" id="em_unit" value="'+esc(x.unit)+'" /></div><div><label class="flabel">Категория</label>'+catSel("em_cat",x.category)+'</div></div>'+
