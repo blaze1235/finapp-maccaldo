@@ -394,10 +394,11 @@ def material_stock(conn, factory):
     purchased = {r["material_id"]: num(r["s"]) for r in q(conn, "SELECT material_id, SUM(quantity_base) s FROM purchases WHERE factory=%s GROUP BY material_id", [factory])}
     consumed = {r["material_id"]: num(r["s"]) for r in q(conn, "SELECT material_id, SUM(quantity_base) s FROM consumption WHERE factory=%s GROUP BY material_id", [factory])}
     rows = []
-    for m in q(conn, "SELECT material_id,name,unit,category,low_stock_threshold FROM raw_materials WHERE factory=%s AND active AND NOT is_compound ORDER BY material_id", [factory]):
+    for m in q(conn, "SELECT material_id,name,unit,category,low_stock_threshold,source_sku_id FROM raw_materials WHERE factory=%s AND active AND NOT is_compound ORDER BY material_id", [factory]):
         cur = purchased.get(m["material_id"], 0) - consumed.get(m["material_id"], 0)
         rows.append({"material_id": m["material_id"], "name": m["name"], "unit": m["unit"],
-                     "category": m["category"], "threshold": num(m["low_stock_threshold"]), "current": cur})
+                     "category": m["category"], "threshold": num(m["low_stock_threshold"]), "current": cur,
+                     "source_sku_id": m["source_sku_id"]})
     return rows
 
 
@@ -421,7 +422,8 @@ def get_stock(conn, factory, with_prices):
     for r in rows:
         o = {"material_id": str(r["material_id"]), "name": r["name"], "unit": r["unit"], "category": r["category"],
              "current_stock": r2(r["current"]), "low_stock_threshold": r2(r["threshold"]),
-             "health": health_color(r["current"], r["threshold"])}
+             "health": health_color(r["current"], r["threshold"]),
+             "source_sku_id": str(r["source_sku_id"]) if r.get("source_sku_id") else None}
         if with_prices:
             w = wac.get(r["material_id"], 0)
             o["wac_price"] = r2(w); o["total_value"] = r2(r["current"] * w)
@@ -445,6 +447,23 @@ def compute_alerts(conn, factory):
     return [{"material_id": str(r["material_id"]), "name": r["name"], "unit": r["unit"],
              "current_stock": r2(r["current"]), "threshold": r2(r["threshold"])}
             for r in material_stock(conn, factory) if r["threshold"] > 0 and r["current"] < r["threshold"]]
+
+
+def get_seasoning_for_main(conn):
+    """Seasoning factory's finished goods available for main factory to pull, with WAC prices."""
+    produced, transferred = finished_map(conn, "seasoning")
+    costs = latest_cost(conn, "seasoning")
+    result = []
+    for s in q(conn, "SELECT * FROM finished_products WHERE factory='seasoning' AND active ORDER BY sku_id"):
+        avail = produced.get(s["sku_id"], 0) - transferred.get(s["sku_id"], 0)
+        if avail > 0:
+            cpp = costs.get(s["sku_id"], {"cpp": 0})["cpp"]
+            result.append({
+                "sku_id": str(s["sku_id"]), "name": s["name"],
+                "available_packs": r2(avail), "cost_per_pack": r2(cpp),
+                "packs_per_box": r2(num(s["packs_per_box"]) or 1),
+            })
+    return result
 
 
 def get_pending(conn, factory):
@@ -594,7 +613,10 @@ def act_bootstrap(tid, b):
             "recent": get_recent(conn, factory, 4),
             "can_prices": wp, "can_edit": rk >= 3, "can_report": rk >= 2,
             "can_transfer": (factory == "seasoning" and "seasoning" in factories_for(u["role"])),
+            "can_buy_from_seasoning": factory == "main",
         }
+        if factory == "main":
+            data["seasoning_available"] = get_seasoning_for_main(conn)
         if rk >= 2:
             data["users"] = list_users(conn)
         return ok(data, compute_alerts(conn, factory))
@@ -972,6 +994,36 @@ def act_report(tid, b):
         return ok({"period": period, "reports": [report_for(conn, f, period) for f in facs]})
 
 
+def act_purchase_from_seasoning(tid, b):
+    """Main factory 'pulls' finished packs from the seasoning factory.
+    Creates a transfer_out record in seasoning and an auto-confirmed receipt in main at WAC price."""
+    with db() as conn:
+        u = require_role(conn, tid, 1)
+        if u["role"] not in ("main", "manager", "owner"):
+            raise Denied("Только сотрудники Главного завода могут принимать продукцию из цеха приправ.")
+        sku_id_raw = b.get("sku_id")
+        sku = q1(conn, "SELECT * FROM finished_products WHERE sku_id=%s AND factory='seasoning'",
+                 [int(sku_id_raw)]) if sku_id_raw else None
+        if not sku:
+            return err("Продукт цеха приправ не найден.")
+        packs = num(b.get("packs"))
+        if packs <= 0:
+            return err("Укажите количество пачек больше нуля.")
+        produced, transferred = finished_map(conn, "seasoning")
+        avail = produced.get(sku["sku_id"], 0) - transferred.get(sku["sku_id"], 0)
+        if packs > avail:
+            return err("Недостаточно на складе цеха приправ. Доступно: " + fmt_num(avail) + " пачек.")
+        cpp = latest_cost(conn, "seasoning").get(sku["sku_id"], {"cpp": 0})["cpp"]
+        d, t = now_parts()
+        tr = q1(conn, """INSERT INTO transfers_out(factory,entry_date,entry_time,sku_id,packs_transferred,logged_by,notes)
+                         VALUES('seasoning',%s,%s,%s,%s,%s,'Закупка Главным заводом') RETURNING id""",
+                [d, t, sku["sku_id"], packs, int(tid)])
+        _create_main_receipt(conn, tr["id"], sku, packs, cpp, tid)
+        return ok({"purchased": True, "packs": r2(packs),
+                   "cost_per_pack": r2(cpp), "total_cost": r2(packs * cpp)},
+                  compute_alerts(conn, "main"))
+
+
 ACTIONS = {
     "get_user": lambda tid, b: act_get_user(tid),
     "bootstrap": act_bootstrap,
@@ -979,6 +1031,7 @@ ACTIONS = {
     "confirm_price": act_confirm_price,
     "log_production": act_log_production,
     "transfer_out": act_transfer_out,
+    "purchase_from_seasoning": act_purchase_from_seasoning,
     "manage_users": act_manage_users,
     "manage_materials": act_manage_materials,
     "manage_skus": act_manage_skus,

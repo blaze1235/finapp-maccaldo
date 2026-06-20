@@ -542,8 +542,11 @@ function renderHistory(m){
          (withP&&l.cost_per_pack_uzs!=null?'<span class="chip chip-b">'+fmt(l.cost_per_pack_uzs)+' /пачка</span>':'')+'</div>'+
          (mats?'<div class="sub" style="margin-top:8px;">↳ '+mats+'</div>':'')+'</div>';
     } else {
+      var isMainPull = l.notes==="Закупка Главным заводом";
       h+='<div class="card'+attr+'><div class="row"><div style="display:flex;align-items:center;gap:11px;"><div class="ic" style="background:var(--puBg)">🚚</div>'+
-         '<div><div class="nm">'+esc(l.sku)+'</div><div class="sub">'+esc(l.date)+' '+esc(l.time)+' · на главный завод'+(l.notes?' · '+esc(l.notes):'')+'</div></div></div>'+
+         '<div><div class="nm">'+esc(l.sku)+'</div><div class="sub">'+esc(l.date)+' '+esc(l.time)+
+         (isMainPull?' · <b>запрошено Главным заводом</b>':' · передача на Главный завод'+(l.notes?' · '+esc(l.notes):''))+
+         '</div></div></div>'+
          '<span class="chip chip-p">−'+fmt(l.packs_transferred)+' пачек</span></div></div>';
     }
   });
@@ -629,19 +632,32 @@ function editProductionSheet(l){
 }
 
 /* ── STOCK ── */
+function renderRawCard(x, withP){
+  return '<div class="card"><div class="row"><div><div class="nm">'+esc(x.name)+'</div>'+
+    '<div class="sub">'+(CAT_RU[x.category]||x.category)+'</div></div>'+
+    '<div style="text-align:right;"><span class="chip chip-'+(x.health==='green'?'g':x.health==='amber'?'a':'r')+'">'+fmt(x.current_stock)+' '+esc(x.unit)+'</span>'+
+    (withP?'<div class="sub mono" style="margin-top:5px;">'+fmt(x.wac_price)+' сум/'+esc(x.unit)+' · '+fmt(x.total_value)+' сум</div>':'')+
+    '</div></div></div>';
+}
 function renderStock(m){
   var D=S.D, withP=canSeePrices(), raw=D.stock.raw_materials||[], fin=D.stock.finished_goods||[];
   var h=alertHtml();
 
+  // For main factory: split own raw materials from seasoning-sourced ones.
+  var ownRaw = raw.filter(function(x){ return !x.source_sku_id; });
+  var seaRaw  = raw.filter(function(x){ return  x.source_sku_id; });
+
   h+='<div class="ph">Сырьё и материалы</div>';
-  if(raw.length){
-    raw.forEach(function(x){
-      h+='<div class="card"><div class="row"><div><div class="nm">'+esc(x.name)+'</div><div class="sub">'+(CAT_RU[x.category]||x.category)+'</div></div>'+
-        '<div style="text-align:right;"><span class="chip chip-'+(x.health==='green'?'g':x.health==='amber'?'a':'r')+'">'+fmt(x.current_stock)+' '+esc(x.unit)+'</span>'+
-        (withP?'<div class="sub mono" style="margin-top:5px;">'+fmt(x.wac_price)+' сум/'+esc(x.unit)+' · '+fmt(x.total_value)+'</div>':'')+
-        '</div></div></div>';
-    });
-  } else h+='<div class="card">'+empty("📦","Нет материалов — добавьте в Настройках")+'</div>';
+  if(ownRaw.length){
+    ownRaw.forEach(function(x){ h+=renderRawCard(x,withP); });
+  } else {
+    h+='<div class="card">'+empty("📦", S.factory==="main" ? "Нет собственного сырья" : "Нет материалов — добавьте в Настройках")+'</div>';
+  }
+
+  if(seaRaw.length){
+    h+='<div class="ph">Получено из Цеха приправ</div>';
+    seaRaw.forEach(function(x){ h+=renderRawCard(x,withP); });
+  }
 
   h+='<div class="ph">Готовая продукция</div>';
   if(fin.length){
@@ -735,7 +751,30 @@ function unitOpts(matId,sel){
 function renderPurchase(b){
   var h="", withP=canSeePrices();
 
-  // Manager: pending price confirmations shown first and prominently.
+  // ── Main factory: accept from seasoning ─────────────────────────────────────
+  if(S.D.can_buy_from_seasoning){
+    var seaAvail=S.D.seasoning_available||[];
+    h+='<div class="ph">Принять из Цеха приправ</div>';
+    if(seaAvail.length){
+      seaAvail.forEach(function(item){
+        h+='<div class="card" style="border-left:3px solid var(--pu);">'+
+          '<div class="row"><div><div class="nm">'+esc(item.name)+'</div>'+
+          '<div class="sub">Доступно: <b>'+fmt(item.available_packs)+'</b> пачек'+
+          (item.cost_per_pack?(' · WAC: <b>'+fmt(item.cost_per_pack)+'</b> сум/пачка'):'')+'</div></div>'+
+          '<span class="chip chip-p">от Цеха приправ</span></div>'+
+          '<div class="inl" style="margin-top:11px;">'+
+          '<input class="fin big mono" type="number" inputmode="numeric" placeholder="пачек" id="sea_'+item.sku_id+'" />'+
+          '<button class="btn btn-ink" style="flex:0 0 auto;padding:14px 18px;white-space:nowrap;" data-sea-sku="'+item.sku_id+'" data-sea-cpp="'+item.cost_per_pack+'">Принять</button>'+
+          '</div>'+
+          (item.cost_per_pack?'<div class="sub" style="margin-top:8px;text-align:center;">Цена зафиксирована автоматически по WAC цеха приправ</div>':'')+
+          '</div>';
+      });
+    } else {
+      h+='<div class="card">'+empty("🚚","Цех приправ не передавал продукцию. Нет доступных остатков.")+'</div>';
+    }
+  }
+
+  // ── Manager: pending price confirmations ────────────────────────────────────
   if(rank()>=2){
     var pend=S.D.pending||[];
     if(pend.length){
@@ -751,7 +790,7 @@ function renderPurchase(b){
     }
   }
 
-  // New purchase form.
+  // ── New regular purchase form ───────────────────────────────────────────────
   h+='<div class="ph">Новая закупка</div><div class="card"><div class="fg">'+
     '<div><label class="flabel">Материал</label><select class="fin" id="pmat">'+matOptions("","purchase")+'</select></div>'+
     '<div class="inl"><div><label class="flabel">Количество</label><input class="fin big mono" id="pqty" type="number" inputmode="decimal" placeholder="0" /></div>'+
@@ -760,7 +799,7 @@ function renderPurchase(b){
     '<button class="btn btn-ink" id="psub">Записать закупку</button>'+
     '<div class="sub" style="text-align:center;">Цену укажет менеджер при подтверждении</div></div></div>';
 
-  // History.
+  // ── Purchase history ────────────────────────────────────────────────────────
   var logs=(S.D.logs&&S.D.logs.purchases)||[];
   if(logs.length){
     h+='<div class="ph">История закупок</div>';
@@ -768,8 +807,8 @@ function renderPurchase(b){
       var chip = l.price_confirmed
         ? '<span class="chip chip-g">'+(withP&&l.total_sum_uzs!=null?money(l.total_sum_uzs):"оплачено")+'</span>'
         : '<span class="chip chip-a">без цены</span>';
-      var transferBadge = l.from_transfer ? ' <span class="chip chip-p">от Цеха приправ</span>' : '';
-      h+='<div class="card"><div class="row"><div><div class="nm">'+esc(l.material)+transferBadge+'</div>'+
+      var fromT = l.from_transfer ? ' <span class="chip chip-p">от Цеха приправ</span>' : '';
+      h+='<div class="card"><div class="row"><div><div class="nm">'+esc(l.material)+fromT+'</div>'+
         '<div class="sub">'+esc(l.date)+' '+esc(l.time)+' · '+fmt(l.quantity_input)+' '+esc(l.unit_input)+(l.supplier?' · '+esc(l.supplier):'')+'</div></div>'+chip+'</div></div>';
     });
   }
@@ -779,6 +818,19 @@ function renderPurchase(b){
   $("#punit").innerHTML=unitOpts(mat.value);
   $("#psub").addEventListener("click",submitPurchase);
   b.querySelectorAll("[data-cf]").forEach(function(btn){ btn.addEventListener("click",function(){ confirmPrice(btn.dataset.cf); }); });
+  b.querySelectorAll("[data-sea-sku]").forEach(function(btn){
+    btn.addEventListener("click",async function(){
+      var skuId=btn.dataset.seaSku, cpp=parseFloat(btn.dataset.seaCpp)||0;
+      var packs=parseFloat(document.getElementById("sea_"+skuId).value);
+      if(!(packs>0)){ toast("Укажите количество пачек","error"); return; }
+      btn.disabled=true; btn.textContent="…";
+      var r=await api("purchase_from_seasoning",{sku_id:skuId,packs:packs});
+      if(r.success){
+        toast("Принято "+fmt(r.data.packs)+" пачек · "+money(r.data.cost_per_pack)+"/пачка","ok");
+        await boot(false);
+      } else { btn.disabled=false; btn.textContent="Принять"; toast(r.error,"error"); }
+    });
+  });
 }
 
 function renderProduction(b){
