@@ -99,24 +99,56 @@ def unit_factor(unit_options, base_unit, label):
     return 1
 
 
+def _opt_item(label, factor, variable_weight=False):
+    item = {"label": str(label), "factor": factor}
+    if variable_weight:
+        item["variable_weight"] = True
+    return item
+
+
 def opts_or_default(unit_options, base_unit):
     if unit_options:
-        return [{"label": str(o["label"]), "factor": num(o.get("factor")) or 1} for o in unit_options]
+        out = []
+        for o in unit_options:
+            vw = bool(o.get("variable_weight"))
+            factor = num(o.get("factor"))
+            if not vw and not factor:
+                factor = 1
+            out.append(_opt_item(o["label"], factor, vw))
+        return out
     return [{"label": str(base_unit or "ед."), "factor": 1}]
 
 
 def normalise_unit_options(unit_options, base_unit, input_units_text):
     if unit_options:
-        return [{"label": str(o["label"]), "factor": num(o.get("factor")) or 1} for o in unit_options]
+        out = []
+        for o in unit_options:
+            vw = bool(o.get("variable_weight"))
+            factor = num(o.get("factor"))
+            if not vw and not factor:
+                factor = 1
+            out.append(_opt_item(o["label"], factor, vw))
+        return out
     if input_units_text:
         parts = [p.strip() for p in str(input_units_text).split(",") if p.strip()]
         out = []
         for p in parts:
             bits = p.split(":")
-            out.append({"label": bits[0].strip(), "factor": (num(bits[1]) or 1) if len(bits) > 1 else 1})
+            label = bits[0].strip()
+            if len(bits) > 1 and bits[1].strip() == "~":
+                out.append(_opt_item(label, 0, True))
+            else:
+                out.append(_opt_item(label, (num(bits[1]) or 1) if len(bits) > 1 else 1))
         if out:
             return out
     return [{"label": str(base_unit or "ед."), "factor": 1}]
+
+
+def is_var_weight(opts, unit_label):
+    for o in opts:
+        if str(o.get("label")) == str(unit_label) and o.get("variable_weight"):
+            return True
+    return False
 
 
 def now_parts():
@@ -572,7 +604,14 @@ def expand_lines(conn, factory, lines, wac):
                 total += lc
                 resolved.append((cid, qb, cm["unit"], lc))
         else:
-            qb = qin * unit_factor(opts_or_default(m["unit_options"], m["unit"]), m["unit"], ln.get("unit_input") or m["unit"])
+            unit_in_label = ln.get("unit_input") or m["unit"]
+            opts = opts_or_default(m["unit_options"], m["unit"])
+            if is_var_weight(opts, unit_in_label):
+                qb = num(ln.get("quantity_base_override"))
+                if qb <= 0:
+                    raise Denied("Укажите фактический вес партии для «%s»." % m["name"])
+            else:
+                qb = qin * unit_factor(opts, m["unit"], unit_in_label)
             lc = qb * wac.get(m["material_id"], 0)
             total += lc
             resolved.append((m["material_id"], qb, m["unit"], lc))
@@ -635,7 +674,13 @@ def act_log_purchase(tid, b):
         if qty <= 0:
             return err("Укажите количество больше нуля.")
         unit_in = str(b.get("unit_input") or m["unit"])
-        qb = qty * unit_factor(opts_or_default(m["unit_options"], m["unit"]), m["unit"], unit_in)
+        opts = opts_or_default(m["unit_options"], m["unit"])
+        if is_var_weight(opts, unit_in):
+            qb = num(b.get("quantity_base_override"))
+            if qb <= 0:
+                return err("Укажите фактический вес партии для этого материала.")
+        else:
+            qb = qty * unit_factor(opts, m["unit"], unit_in)
         d, t = now_parts()
         ex(conn, """INSERT INTO purchases(factory,entry_date,entry_time,material_id,quantity_input,unit_input,quantity_base,unit_base,supplier,logged_by,price_confirmed)
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,FALSE)""",
@@ -891,7 +936,13 @@ def act_edit_purchase(tid, b):
         if qty <= 0:
             return err("Укажите количество больше нуля.")
         unit_in = str(b.get("unit_input") or p["unit_input"] or m["unit"])
-        qb = qty * unit_factor(opts_or_default(m["unit_options"], m["unit"]), m["unit"], unit_in)
+        opts = opts_or_default(m["unit_options"], m["unit"])
+        if is_var_weight(opts, unit_in):
+            qb = num(b.get("quantity_base_override"))
+            if qb <= 0:
+                return err("Укажите фактический вес партии.")
+        else:
+            qb = qty * unit_factor(opts, m["unit"], unit_in)
         per = (num(p["total_sum_uzs"]) / qb) if (p["total_sum_uzs"] is not None and qb > 0) else p["price_per_base_unit"]
         sup = str(b["supplier"]) if b.get("supplier") is not None else p["supplier"]
         ex(conn, "UPDATE purchases SET quantity_input=%s, unit_input=%s, quantity_base=%s, supplier=%s, price_per_base_unit=%s WHERE id=%s",

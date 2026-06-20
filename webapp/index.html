@@ -584,17 +584,36 @@ function openLogEdit(kind,id){
   else if(kind==="transfer"){ var lt=(L.transfers||[]).find(function(x){return x.id===id;}); if(lt) editTransferSheet(lt); }
 }
 function editPurchaseSheet(l){
+  var mat=(S.D.materials||[]).find(function(x){return x.material_id===l.material_id;});
+  var baseUnit=mat?mat.unit:"кг";
+  var initVW=isVarWeight(l.material_id,l.unit_input);
   openSheet("Изменить закупку",
     '<div class="fg"><div class="nm">'+esc(l.material)+'</div>'+
     '<div class="inl"><div><label class="flabel">Количество</label><input class="fin big mono" id="epu_qty" type="number" value="'+l.quantity_input+'"/></div>'+
     '<div style="flex:0 0 130px;"><label class="flabel">Ед.</label><select class="fin" id="epu_unit">'+unitOpts(l.material_id,l.unit_input)+'</select></div></div>'+
+    '<div id="epu_vw_wrap" style="'+(initVW?'':'display:none;')+'background:var(--amBg);border-radius:13px;padding:13px 15px;">'+
+      '<label class="flabel" style="color:var(--am);">⚖️ Фактический вес, <span id="epu_vw_unit">'+esc(baseUnit)+'</span></label>'+
+      '<input class="fin mono" id="epu_vw" type="number" value="'+l.quantity_base+'"/>'+
+    '</div>'+
     '<div><label class="flabel">Поставщик</label><input class="fin" id="epu_sup" value="'+esc(l.supplier||"")+'"/></div>'+
     '<button class="btn btn-ink" id="epu_save">Сохранить</button></div>',
-    function(){ $("#epu_save").addEventListener("click",async function(){
-      var qty=parseFloat($("#epu_qty").value); if(!(qty>0)){toast("Укажите количество","error");return;}
-      var r=await api("edit_purchase",{id:l.id,quantity_input:qty,unit_input:$("#epu_unit").value,supplier:$("#epu_sup").value});
-      if(r.success){toast("Изменено","ok");closeSheet();await boot(false);}else toast(r.error,"error");
-    }); });
+    function(){
+      $("#epu_unit").addEventListener("change",function(){
+        var vw=isVarWeight(l.material_id,$("#epu_unit").value);
+        $("#epu_vw_wrap").style.display=vw?"block":"none";
+      });
+      $("#epu_save").addEventListener("click",async function(){
+        var qty=parseFloat($("#epu_qty").value); if(!(qty>0)){toast("Укажите количество","error");return;}
+        var unitVal=$("#epu_unit").value;
+        var payload={id:l.id,quantity_input:qty,unit_input:unitVal,supplier:$("#epu_sup").value};
+        if(isVarWeight(l.material_id,unitVal)){
+          var vw=parseFloat($("#epu_vw").value); if(!(vw>0)){toast("Укажите фактический вес","error");return;}
+          payload.quantity_base_override=vw;
+        }
+        var r=await api("edit_purchase",payload);
+        if(r.success){toast("Изменено","ok");closeSheet();await boot(false);}else toast(r.error,"error");
+      });
+    });
 }
 function editTransferSheet(l){
   openSheet("Изменить передачу",
@@ -745,7 +764,14 @@ function skuOptions(sel,ph){
 function unitOpts(matId,sel){
   var m=(S.D.materials||[]).find(function(x){return x.material_id===matId;});
   var opts=(m&&m.unit_options&&m.unit_options.length)?m.unit_options:(m?[{label:m.unit,factor:1}]:[]);
-  return opts.map(function(o){ return '<option value="'+esc(o.label)+'"'+(o.label===sel?" selected":"")+'>'+esc(o.label)+'</option>'; }).join("");
+  return opts.map(function(o){ return '<option value="'+esc(o.label)+'"'+(o.label===sel?" selected":"")+(o.variable_weight?' data-vw="1"':'')+'>'+esc(o.label)+(o.variable_weight?' (~)':'')+'</option>'; }).join("");
+}
+function isVarWeight(matId,unitLabel){
+  var m=(S.D.materials||[]).find(function(x){return x.material_id===matId;});
+  if(!m) return false;
+  var opts=(m.unit_options&&m.unit_options.length)?m.unit_options:[{label:m.unit,factor:1}];
+  var opt=opts.find(function(o){return o.label===unitLabel;});
+  return !!(opt&&opt.variable_weight);
 }
 
 function renderPurchase(b){
@@ -795,6 +821,11 @@ function renderPurchase(b){
     '<div><label class="flabel">Материал</label><select class="fin" id="pmat">'+matOptions("","purchase")+'</select></div>'+
     '<div class="inl"><div><label class="flabel">Количество</label><input class="fin big mono" id="pqty" type="number" inputmode="decimal" placeholder="0" /></div>'+
     '<div style="flex:0 0 130px;"><label class="flabel">Ед.</label><select class="fin" id="punit"></select></div></div>'+
+    '<div id="pvarw" style="display:none;background:var(--amBg);border-radius:13px;padding:13px 15px;">'+
+      '<label class="flabel" style="color:var(--am);">⚖️ Фактический вес партии, <span id="pvarw_unit">кг</span></label>'+
+      '<input class="fin big mono" id="pvarw_qty" type="number" inputmode="decimal" placeholder="0" />'+
+      '<div class="sub" style="margin-top:6px;">Вес этой партии отличается от стандартного — введите точный вес в базовых единицах</div>'+
+    '</div>'+
     '<div><label class="flabel">Поставщик</label><input class="fin" id="psup" placeholder="необязательно" /></div>'+
     '<button class="btn btn-ink" id="psub">Записать закупку</button>'+
     '<div class="sub" style="text-align:center;">Цену укажет менеджер при подтверждении</div></div></div>';
@@ -814,8 +845,20 @@ function renderPurchase(b){
   }
 
   b.innerHTML=h;
-  var mat=$("#pmat"); mat.addEventListener("change",function(){ $("#punit").innerHTML=unitOpts(mat.value); });
+  var mat=$("#pmat");
+  function updatePurchaseVarW(){
+    var mid=mat.value, unit=$("#punit").value;
+    var vw=isVarWeight(mid,unit);
+    $("#pvarw").style.display=vw?"block":"none";
+    if(vw){
+      var m=(S.D.materials||[]).find(function(x){return x.material_id===mid;});
+      if(m) $("#pvarw_unit").textContent=m.unit;
+    }
+  }
+  mat.addEventListener("change",function(){ $("#punit").innerHTML=unitOpts(mat.value); updatePurchaseVarW(); });
+  $("#punit").addEventListener("change",updatePurchaseVarW);
   $("#punit").innerHTML=unitOpts(mat.value);
+  updatePurchaseVarW();
   $("#psub").addEventListener("click",submitPurchase);
   b.querySelectorAll("[data-cf]").forEach(function(btn){ btn.addEventListener("click",function(){ confirmPrice(btn.dataset.cf); }); });
   b.querySelectorAll("[data-sea-sku]").forEach(function(btn){
@@ -868,24 +911,38 @@ function updateBoxHint(){
 function readProdLines(){
   var rows=document.querySelectorAll("#plines .pline");
   S.prodLines=Array.prototype.map.call(rows,function(r){
-    return { material_id:r.querySelector(".pl-mat").value, qty:r.querySelector(".pl-qty").value, unit:r.querySelector(".pl-unit").value };
+    var i=r.dataset.pli;
+    var vwRow=document.querySelector('#plines [data-vwi="'+i+'"]');
+    var vwIn=vwRow?vwRow.querySelector(".pl-vw"):null;
+    return { material_id:r.querySelector(".pl-mat").value, qty:r.querySelector(".pl-qty").value, unit:r.querySelector(".pl-unit").value, vw_qty:vwIn?vwIn.value:"" };
   });
-  if(!S.prodLines.length) S.prodLines=[{material_id:"",qty:"",unit:""}];
+  if(!S.prodLines.length) S.prodLines=[{material_id:"",qty:"",unit:"",vw_qty:""}];
 }
 function renderProdLines(){
   var box=$("#plines");
   box.innerHTML=S.prodLines.map(function(l,i){
     var mat=(S.D.materials||[]).find(function(x){return x.material_id===l.material_id;});
     var isC=mat&&mat.is_compound;
+    var unitLabel=l.unit||(mat?mat.unit:"");
+    var isVW=mat&&!isC&&isVarWeight(l.material_id,unitLabel);
     var hint=isC?'<div class="sub" style="margin:-3px 0 8px 2px;">🧩 '+((mat.recipe||[]).map(function(c){return esc(c.name)+" "+fmt(c.quantity)+" "+esc(c.unit);}).join(" · "))+' × кол-во партий</div>':'';
-    return '<div class="pline">'+
+    var vwRow=isVW?
+      '<div class="pl-vw-row" data-vwi="'+i+'" style="display:flex;align-items:center;gap:8px;margin:-2px 0 6px 2px;padding:8px 10px;background:var(--amBg);border-radius:10px;">'+
+        '<span style="font-size:12px;font-weight:600;color:var(--am);white-space:nowrap;">⚖️ Вес партии, '+esc(mat.unit)+'</span>'+
+        '<input class="pl-vw mono" type="number" inputmode="decimal" style="flex:1;background:transparent;border:none;outline:none;font-size:15px;font-weight:700;" placeholder="0" value="'+(l.vw_qty||"")+'"/>'+
+      '</div>':
+      '<div class="pl-vw-row" data-vwi="'+i+'" style="display:none;"></div>';
+    return '<div class="pline" data-pli="'+i+'">'+
       '<select class="pl-mat" style="flex:1.4;background:var(--bg);border:none;outline:none;" data-i="'+i+'">'+matOptions(l.material_id)+'</select>'+
       '<input class="pl-qty mono" style="flex:.8;background:var(--bg);border:none;outline:none;" type="number" inputmode="decimal" placeholder="'+(isC?"партий":"кол-во")+'" value="'+(l.qty||"")+'" />'+
-      '<select class="pl-unit" style="flex:.8;background:var(--bg);border:none;outline:none;">'+unitOpts(l.material_id,l.unit)+'</select>'+
+      '<select class="pl-unit" style="flex:.8;background:var(--bg);border:none;outline:none;">'+unitOpts(l.material_id,unitLabel)+'</select>'+
       (S.prodLines.length>1?'<button class="x" data-x="'+i+'">×</button>':'')+
-      '</div>'+hint;
+      '</div>'+vwRow+hint;
   }).join("");
   box.querySelectorAll(".pl-mat").forEach(function(sel){
+    sel.addEventListener("change",function(){ readProdLines(); renderProdLines(); });
+  });
+  box.querySelectorAll(".pl-unit").forEach(function(sel){
     sel.addEventListener("change",function(){ readProdLines(); renderProdLines(); });
   });
   box.querySelectorAll("[data-x]").forEach(function(btn){
@@ -898,8 +955,14 @@ async function submitPurchase(){
   var mat=$("#pmat").value, qty=$("#pqty").value, unit=$("#punit").value, sup=$("#psup").value;
   if(!mat){ toast("Выберите материал. Проверьте список материалов.","error"); return; }
   if(!(parseFloat(qty)>0)){ toast("Укажите количество больше нуля.","error"); return; }
+  var payload={ material_id:mat, quantity_input:parseFloat(qty), unit_input:unit, supplier:sup };
+  if(isVarWeight(mat,unit)){
+    var vw=parseFloat($("#pvarw_qty").value);
+    if(!(vw>0)){ toast("Укажите фактический вес партии.","error"); return; }
+    payload.quantity_base_override=vw;
+  }
   var btn=$("#psub"); btn.disabled=true; btn.textContent="…";
-  var r=await api("log_purchase",{ material_id:mat, quantity_input:parseFloat(qty), unit_input:unit, supplier:sup });
+  var r=await api("log_purchase",payload);
   if(r.success){ toast("Закупка записана","ok"); await boot(false); }
   else { btn.disabled=false; btn.textContent="Записать закупку"; toast(r.error,"error"); }
 }
@@ -910,13 +973,22 @@ async function submitProduction(){
   if(!(parseFloat(packs)>0)){ toast("Укажите количество пачек больше нуля.","error"); return; }
   var lines=S.prodLines.filter(function(l){ return l.material_id && parseFloat(l.qty)>0; });
   if(!lines.length){ toast("Добавьте хотя бы один материал с количеством.","error"); return; }
-  var materials=lines.map(function(l){ return { material_id:l.material_id, quantity_input:parseFloat(l.qty), unit_input:l.unit }; });
+  for(var li=0;li<lines.length;li++){
+    if(isVarWeight(lines[li].material_id,lines[li].unit)&&!(parseFloat(lines[li].vw_qty)>0)){
+      toast("Укажите фактический вес партии для материала с переменным весом (~).","error"); return;
+    }
+  }
+  var materials=lines.map(function(l){
+    var entry={ material_id:l.material_id, quantity_input:parseFloat(l.qty), unit_input:l.unit };
+    if(isVarWeight(l.material_id,l.unit)) entry.quantity_base_override=parseFloat(l.vw_qty);
+    return entry;
+  });
   var btn=$("#prodsub"); btn.disabled=true; btn.textContent="…";
   var r=await api("log_production",{ sku_id:sku, packs_produced:parseFloat(packs), materials:materials });
   if(r.success){
     var c=r.data;
     toast("Готово · с/с "+money(c.cost_per_pack_uzs)+"/пачка","ok");
-    S.prodLines=[{material_id:"",qty:"",unit:""}];
+    S.prodLines=[{material_id:"",qty:"",unit:"",vw_qty:""}];
     await boot(false);
   } else { btn.disabled=false; btn.textContent="Записать производство"; toast(r.error,"error"); }
 }
@@ -1075,7 +1147,7 @@ function addMaterial(){
     '<label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;"><input type="checkbox" id="nm_comp" style="width:auto;height:18px;"/> Это компаунд (составное сырьё)</label>'+
     '<div id="nm_normal" class="fg">'+
       '<div class="inl"><div><label class="flabel">Базовая ед.</label><input class="fin" id="nm_unit" value="кг" /></div><div><label class="flabel">Категория</label>'+catSel("nm_cat","other")+'</div></div>'+
-      '<div><label class="flabel">Единицы ввода</label><input class="fin" id="nm_units" placeholder="кг:1, мешок 25кг:25" /></div>'+
+      '<div><label class="flabel">Единицы ввода</label><input class="fin" id="nm_units" placeholder="кг:1, мешок 25кг:25, Рулон:~" /></div>'+
       '<div><label class="flabel">Порог низкого остатка</label><input class="fin mono" id="nm_thr" type="number" value="0" /></div>'+
     '</div>'+
     '<div id="nm_recipe" style="display:none;"><label class="flabel">Состав (на 1 партию)</label><div id="rlines"></div>'+
@@ -1125,7 +1197,7 @@ function editMaterial(x){
   openSheet("Материал",
     '<div class="fg"><div><label class="flabel">Название</label><input class="fin" id="em_name" value="'+esc(x.name)+'" /></div>'+
     '<div class="inl"><div><label class="flabel">Базовая ед.</label><input class="fin" id="em_unit" value="'+esc(x.unit)+'" /></div><div><label class="flabel">Категория</label>'+catSel("em_cat",x.category)+'</div></div>'+
-    '<div><label class="flabel">Единицы ввода</label><input class="fin" id="em_units" value="'+esc((x.unit_options||[]).map(function(o){return o.label+":"+o.factor;}).join(", "))+'" /></div>'+
+    '<div><label class="flabel">Единицы ввода</label><input class="fin" id="em_units" placeholder="кг:1, мешок:25, Рулон:~" value="'+esc((x.unit_options||[]).map(function(o){return o.label+":" + (o.variable_weight?"~":o.factor);}).join(", "))+'" /></div>'+
     '<div><label class="flabel">Порог</label><input class="fin mono" id="em_thr" type="number" value="'+x.low_stock_threshold+'" /></div>'+
     '<button class="btn btn-ink" id="em_save">Сохранить</button>'+
     '<button class="btn btn-red-out" id="em_del">'+(x.active?"Скрыть материал":"Вернуть материал")+'</button></div>',
