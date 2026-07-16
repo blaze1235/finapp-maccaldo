@@ -28,7 +28,7 @@ import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 
 # ── Config ──────────────────────────────────────────────────────────────────
-APP_VERSION  = "5"
+APP_VERSION  = "6"
 BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 PORT         = int(os.getenv("PORT", os.getenv("API_PORT", "8080")))
 WEBAPP_URL   = os.getenv("WEBAPP_URL", "")
@@ -1174,6 +1174,27 @@ def run_bot():
     import telebot
     from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
     bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+
+    # Watchdog: infinity_polling can hang forever after network errors while the
+    # HTTP healthcheck keeps passing, leaving the bot silently dead. Heartbeat on
+    # every successful getUpdates; if stale > 5 min, exit so Railway restarts us.
+    last_poll_ok = {"t": time.time()}
+    _orig_get_updates = bot.get_updates
+
+    def _hb_get_updates(*a, **k):
+        r = _orig_get_updates(*a, **k)
+        last_poll_ok["t"] = time.time()
+        return r
+    bot.get_updates = _hb_get_updates
+
+    def _watchdog():
+        while True:
+            time.sleep(30)
+            stale = time.time() - last_poll_ok["t"]
+            if stale > 300:
+                log.error("Bot polling stale for %.0fs — exiting for Railway restart.", stale)
+                os._exit(1)
+    threading.Thread(target=_watchdog, daemon=True).start()
 
     if WEBAPP_URL.startswith("https://"):
         try:
